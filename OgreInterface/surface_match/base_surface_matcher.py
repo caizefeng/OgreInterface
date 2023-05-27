@@ -134,8 +134,8 @@ class BaseSurfaceMatcher:
             site_properties=film_struc.site_properties,
         )
 
-        Poscar(sub_struc).write_file("POSCAR_sub_top")
-        Poscar(film_struc).write_file("POSCAR_film_bot")
+        # Poscar(sub_struc).write_file("POSCAR_sub_top")
+        # Poscar(film_struc).write_file("POSCAR_film_bot")
 
         sub_equivs = sub_struc.site_properties["bulk_equivalent"]
         film_equivs = film_struc.site_properties["bulk_equivalent"]
