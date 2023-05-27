@@ -1492,10 +1492,6 @@ class Interface:
                 np.array(relaxed_structure.atomic_numbers) == 1
             )[0]
 
-            relaxed_structure.add_site_property(
-                "orig_ind", list(range(len(relaxed_structure)))
-            )
-
             relaxed_structure.remove_sites(hydrogen_inds)
 
             relaxation_shifts = np.zeros((len(unrelaxed_structure), 3))
@@ -1572,7 +1568,6 @@ class Interface:
 
             for i in relaxed_inds:
                 init_ind = unrelaxed_structure[i].properties["orig_ind"]
-                # relax_ind = relaxed_structure[i].properties["orig_ind"]
                 relaxed_coords = relaxed_structure[i].coords
                 relaxed_coords -= relaxed_ref
                 unrelaxed_coords = unrelaxed_structure[i].coords
