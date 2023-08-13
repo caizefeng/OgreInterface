@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 from ase import Atoms
 from pymatgen.core.periodic_table import Element
 from pymatgen.core.structure import Structure
+from pymatgen.io.ase import AseAtomsAdaptor
 import torch
 import numpy as np
 from OgreInterface.score_function.neighbors import TorchNeighborList
@@ -11,6 +12,7 @@ from OgreInterface.score_function.interface_neighbors import (
 )
 import time
 from copy import deepcopy
+from matscipy.neighbours import neighbour_list
 
 
 def _atoms_collate_fn(batch):
@@ -140,6 +142,64 @@ def generate_input_dict(
     tn.forward(inputs=input_dict)
     input_dict["cell"] = input_dict["cell"].view(-1, 3, 3)
     input_dict["pbc"] = input_dict["pbc"].view(-1, 3)
+
+    for k, v in input_dict.items():
+        if "float" in str(v.dtype):
+            input_dict[k] = v.to(dtype=torch.float32)
+        if "idx" in k:
+            input_dict[k] = v.to(dtype=torch.long)
+
+    return input_dict
+
+
+def generate_input_dict_matscipy(
+    structure: Structure,
+    cutoff: float,
+    interface: bool = False,
+) -> Dict:
+    site_props = structure.site_properties
+
+    is_film = torch.tensor(site_props["is_film"], dtype=torch.long)
+    R = torch.from_numpy(structure.cart_coords)
+    cell = torch.from_numpy(deepcopy(structure.lattice.matrix))
+
+    e_negs = torch.Tensor([s.specie.X for s in structure])
+
+    atoms = AseAtomsAdaptor().get_atoms(structure)
+
+    if interface:
+        pbc = torch.Tensor([True, True, False]).to(dtype=torch.bool)
+        atoms.set_pbc([True, True, False])
+    else:
+        pbc = torch.Tensor([True, True, True]).to(dtype=torch.bool)
+
+    idx_i, idx_j, frac_offsets = neighbour_list(
+        "ijS",
+        atoms=atoms,
+        cutoff=cutoff,
+    )
+    offsets = frac_offsets.dot(atoms.cell)
+
+    input_dict = {
+        "n_atoms": torch.tensor([len(structure)]),
+        "Z": torch.tensor(structure.atomic_numbers, dtype=torch.long),
+        "R": R,
+        "cell": cell.view(-1, 3, 3),
+        "pbc": pbc.view(-1, 3),
+        "is_film": is_film,
+        "e_negs": e_negs,
+        "idx_i": torch.from_numpy(idx_i),
+        "idx_j": torch.from_numpy(idx_j),
+        "offsets": torch.from_numpy(offsets),
+    }
+
+    if "charges" in site_props:
+        charges = torch.tensor(site_props["charges"])
+        input_dict["partial_charges"] = charges
+
+    if "born_ns" in site_props:
+        ns = torch.tensor(site_props["born_ns"])
+        input_dict["born_ns"] = ns
 
     for k, v in input_dict.items():
         if "float" in str(v.dtype):
