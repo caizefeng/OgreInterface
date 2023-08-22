@@ -84,7 +84,7 @@ class SurfaceGenerator(Sequence):
         generate_all: Determines if all possible surface terminations are generated.
         lazy: Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
             (this is used for the MillerIndex search to make things faster)
-        supress_warnings: This gives the user the option to supress warnings if they know what they are doing and don't need to see the warning messages
+        suppress_warnings: This gives the user the option to suppress warnings if they know what they are doing and don't need to see the warning messages
 
     Attributes:
         slabs (list): List of OgreInterface Surface objects with different surface terminations.
@@ -119,11 +119,11 @@ class SurfaceGenerator(Sequence):
         refine_structure: bool = True,
         generate_all: bool = True,
         lazy: bool = False,
-        supress_warnings: bool = False,
+        suppress_warnings: bool = False,
     ) -> None:
         super().__init__()
         self.refine_structure = refine_structure
-        self._supress_warnings = supress_warnings
+        self._suppress_warnings = suppress_warnings
 
         (
             self.bulk_structure,
@@ -189,7 +189,7 @@ class SurfaceGenerator(Sequence):
         refine_structure: bool = True,
         generate_all: bool = True,
         lazy: bool = False,
-        supress_warnings: bool = False,
+        suppress_warnings: bool = False,
     ) -> SelfSurfaceGenerator:
         """Creating a SurfaceGenerator from a file (i.e. POSCAR, cif, etc)
 
@@ -205,7 +205,7 @@ class SurfaceGenerator(Sequence):
                 work exclusively with the primitive structure so we always have it on hand.
             lazy: Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
                 (this is used for the MillerIndex search to make things faster)
-            supress_warnings: This gives the user the option to supress warnings if they know what they are doing and don't need to see the warning messages
+            suppress_warnings: This gives the user the option to suppress warnings if they know what they are doing and don't need to see the warning messages
 
         Returns:
             SurfaceGenerator
@@ -220,7 +220,7 @@ class SurfaceGenerator(Sequence):
             refine_structure,
             generate_all,
             lazy,
-            supress_warnings,
+            suppress_warnings,
         )
 
     def _get_bulk(self, atoms_or_struc):
@@ -255,7 +255,7 @@ class SurfaceGenerator(Sequence):
             if not np.isclose(
                 conv_length_and_angles - init_length_and_angles, 0
             ).all():
-                if not self._supress_warnings:
+                if not self._suppress_warnings:
                     labels = ["a", "b", "c", "alpha", "beta", "gamma"]
                     init_cell_str = ", ".join(
                         [
@@ -280,7 +280,7 @@ class SurfaceGenerator(Sequence):
                             f"Initial: {init_cell_str}",
                             f"Refined: {conv_cell_str}",
                             "Make sure the input miller index is for the refined structure, otherwise set refine_structure=False",
-                            "To turn off this warning set supress_warnings=True",
+                            "To turn off this warning set suppress_warnings=True",
                             "----------------------------------------------------------",
                             "",
                         ]

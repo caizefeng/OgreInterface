@@ -25,7 +25,7 @@ from functools import reduce
 from ase import Atoms
 import warnings
 
-# supress warning from CrystallNN when ionic radii are not found.
+# suppress warning from CrystallNN when ionic radii are not found.
 warnings.filterwarnings("ignore", module=r"pymatgen.analysis.local_env")
 
 

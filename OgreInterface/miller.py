@@ -133,7 +133,7 @@ class MillerSearch(object):
             if not np.isclose(
                 conv_length_and_angles - init_length_and_angles, 0
             ).all():
-                if not self._supress_warnings:
+                if not self._suppress_warnings:
                     labels = ["a", "b", "c", "alpha", "beta", "gamma"]
                     init_cell_str = ", ".join(
                         [
@@ -158,7 +158,7 @@ class MillerSearch(object):
                             f"Initial: {init_cell_str}",
                             f"Refined: {conv_cell_str}",
                             "Make sure the input miller index is for the refined structure, otherwise set refine_structure=False",
-                            "To turn off this warning set supress_warnings=True",
+                            "To turn off this warning set suppress_warnings=True",
                             "----------------------------------------------------------",
                             "",
                         ]
