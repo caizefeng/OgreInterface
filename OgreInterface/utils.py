@@ -36,6 +36,18 @@ def spglib_standardize(
     to_primitive: bool = False,
     no_idealize: bool = False,
 ) -> Structure:
+    """
+    This function standardized a given structure using the spglib library
+
+    Args:
+        structure: Input pymatgen Structure
+        to_primitive: Determines if the structure should be converted to it's primitive unit cell
+        no_idealize: Determines if the lattice vectors should be idealized
+            (i.e. rotate a cubic structure so \\vec{a} points along the [1, 0, 0] cartesian direction)
+
+    Returns:
+        The standardized structure in the form of a pymatgen Structure object
+    """
     init_lattice = structure.lattice.matrix
     init_positions = structure.frac_coords
     init_numbers = np.array(structure.atomic_numbers)
@@ -256,7 +268,7 @@ def group_layers(structure, atol=None):
     """
     This function will find the atom indices belonging to each unique atomic layer.
 
-    Parameters:
+    Args:
         structure (pymatgen.core.structure.Structure): Slab structure
         atol (float or None): Tolarence used for grouping the layers. Useful for grouping
             layers in a structure with relaxed atomic positions.
@@ -306,7 +318,7 @@ def get_reduced_basis(basis: np.ndarray) -> np.ndarray:
     |  0 -2  4 | ==> | 0 -1  2 |
     | 10 10 10 |     | 1  1  1 |
 
-    Parameters:
+    Args:
         basis (np.ndarray): 3x3 matrix defining the lattice vectors
 
     Returns:

@@ -73,8 +73,8 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self.opt_d_interface = self.d_interface
 
         self.iface_inputs = self._generate_base_inputs(structure=self.iface)
-        self.sub_inputs = self._generate_base_inputs(structure=self.sub_part)
-        self.film_inputs = self._generate_base_inputs(structure=self.film_part)
+        self.sub_inputs = self._generate_bulk_inputs(structure=self.sub_part)
+        self.film_inputs = self._generate_bulk_inputs(structure=self.film_part)
         self.film_energy, self.sub_energy = self._get_film_sub_energies()
 
     def get_optimized_structure(self):
@@ -88,9 +88,12 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         )
 
         self.iface = self.interface.get_interface(orthogonal=True)
+        self._add_born_ns(self.iface)
+        self._add_charges(self.iface)
         self.iface_inputs = self._generate_base_inputs(structure=self.iface)
 
         self.opt_xy_shift[:2] = 0.0
+        self.d_interface = self.opt_d_interface
 
     def _add_charges(self, struc):
         charges = [
@@ -318,11 +321,15 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             batch_size=len(x),
         )
         E, _, _, _, _ = self._calculate(inputs=batch_inputs, shifts=shift)
-        E_adh = (
-            -((self.film_energy + self.sub_energy) - E) / self.interface.area
+        # E_adh = (
+        #     -((self.film_energy + self.sub_energy) - E) / self.interface.area
+        # )
+
+        E_int = (E - self.film_energy - self.sub_energy) / (
+            2 * self.interface.area
         )
 
-        return E_adh
+        return E_int
 
     def _get_film_sub_energies(self):
         sub_inputs = create_batch(inputs=self.sub_inputs, batch_size=1)
@@ -337,7 +344,14 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             shifts=np.zeros((1, 3)),
         )
 
-        return film_energy, sub_energy
+        N_sub_layers = self.interface.substrate.layers
+        N_film_layers = self.interface.film.layers
+        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
+        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
+        film_scale = N_film_layers * N_film_sc
+        sub_scale = N_sub_layers * N_sub_sc
+
+        return film_scale * film_energy, sub_scale * sub_energy
 
     def optimizePSO(
         self,

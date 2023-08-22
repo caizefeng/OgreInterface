@@ -1,6 +1,7 @@
 from OgreInterface.surfaces import Interface
 from OgreInterface.score_function.generate_inputs import (
     generate_input_dict,
+    generate_input_dict_matscipy,
     create_batch,
 )
 from typing import List
@@ -11,11 +12,6 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.patches import Polygon
 from scipy.interpolate import RectBivariateSpline, CubicSpline
 from copy import deepcopy
-
-# from bayes_opt import BayesianOptimization
-# from bayes_opt.logger import JSONLogger
-# from bayes_opt.event import Events
-# from bayes_opt import SequentialDomainReductionTransformer
 import torch
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
@@ -49,8 +45,16 @@ class BaseSurfaceMatcher:
         self.interface = interface
 
         self.iface = self.interface.get_interface(orthogonal=True)
-        self.film_part = self.interface.get_film_supercell(orthogonal=True)
-        self.sub_part = self.interface.get_substrate_supercell(orthogonal=True)
+        self.film_part = self.interface.film.oriented_bulk_structure.copy()
+        self.sub_part = self.interface.substrate.oriented_bulk_structure.copy()
+        self.film_part.add_site_property(
+            "is_film",
+            [True] * len(self.film_part),
+        )
+        self.sub_part.add_site_property(
+            "is_film",
+            [False] * len(self.sub_part),
+        )
 
         self.matrix = deepcopy(interface._orthogonal_structure.lattice.matrix)
         self._vol = np.linalg.det(self.matrix)
@@ -70,11 +74,36 @@ class BaseSurfaceMatcher:
 
         self.shifts = self._generate_shifts()
 
+    def _get_interface_energy(self, total_energies: np.ndarray) -> np.ndarray:
+        interface_energies = (
+            total_energies - self.film_energy - self.sub_energy
+        ) / (2 * self.interface.area)
+
+        return interface_energies
+
     def _generate_base_inputs(self, structure: Structure):
+        # s = time.time()
+        # inputs = generate_input_dict(
+        #     structure=structure,
+        #     cutoff=self._cutoff,
+        #     interface=True,
+        # )
+        # print("Torch Time = ", time.time() - s)
+        # s = time.time()
         inputs = generate_input_dict(
             structure=structure,
             cutoff=self._cutoff,
             interface=True,
+        )
+        # print("Matscipy Time = ", time.time() - s)
+
+        return inputs
+
+    def _generate_bulk_inputs(self, structure: Structure):
+        inputs = generate_input_dict(
+            structure=structure,
+            cutoff=self._cutoff,
+            interface=False,
         )
 
         return inputs
@@ -310,10 +339,15 @@ class BaseSurfaceMatcher:
         y_grid = np.linspace(0, 1, self.grid_density_y)
         X, Y = np.meshgrid(x_grid, y_grid)
 
-        Z = (
-            -((film_energy + sub_energy) - interface_energy)
-            / self.interface.area
-        )
+        N_sub_layers = self.interface.substrate.layers
+        N_film_layers = self.interface.film.layers
+        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
+        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
+
+        sub_obs = sub_energy * N_sub_sc * N_sub_layers
+        film_obs = film_energy * N_film_sc * N_film_layers
+
+        Z = (interface_energy - film_obs - sub_obs) / (2 * self.interface.area)
 
         a = self.matrix[0, :2]
         b = self.matrix[1, :2]
@@ -391,8 +425,16 @@ class BaseSurfaceMatcher:
         Returns:
             The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
         """
-        interface_energy = (
-            -((film_energy + sub_energy) - energies) / self.interface.area
+        N_sub_layers = self.interface.substrate.layers
+        N_film_layers = self.interface.film.layers
+        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
+        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
+
+        sub_obs = sub_energy * N_sub_sc * N_sub_layers
+        film_obs = film_energy * N_film_sc * N_film_layers
+
+        interface_energy = (energies - film_obs - sub_obs) / (
+            2 * self.interface.area
         )
 
         fig, axs = plt.subplots(
@@ -464,12 +506,12 @@ class BaseSurfaceMatcher:
 
         return frac_abc[:, :2]
 
-    def get_optmized_structure(self):
-        opt_shift = self.opt_xy_shift
+    # def get_optmized_structure(self):
+    #     opt_shift = self.opt_xy_shift
 
-        self.interface.shift_film_inplane(
-            x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
-        )
+    #     self.interface.shift_film_inplane(
+    #         x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
+    #     )
 
     def _plot_heatmap(
         self, fig, ax, X, Y, Z, cmap, fontsize, show_max, add_color_bar
@@ -821,10 +863,7 @@ class BaseSurfaceMatcher:
         y_grid = np.linspace(0, 1, self.grid_density_y)
         X, Y = np.meshgrid(x_grid, y_grid)
 
-        Z = (
-            -((film_energy + sub_energy) - interface_energy)
-            / self.interface.area
-        )
+        Z = self._get_interface_energy(total_energies=interface_energy)
 
         if save_raw_data_file is not None:
             if save_raw_data_file.split(".")[-1] != "npz":
@@ -936,13 +975,16 @@ class BaseSurfaceMatcher:
             coulomb.append(_coulomb)
             born.append(_born)
 
-        interface_energy = (
-            -(
-                (self.film_energy + self.sub_energy)
-                - np.array(interface_energy)
-            )
-            / self.interface.area
+        interface_energy = self._get_interface_energy(
+            total_energies=interface_energy
         )
+        # interface_energy = (
+        #     -(
+        #         (self.film_energy + self.sub_energy)
+        #         - np.array(interface_energy)
+        #     )
+        #     / self.interface.area
+        # )
 
         if save_raw_data_file is not None:
             if save_raw_data_file.split(".")[-1] != "npz":
