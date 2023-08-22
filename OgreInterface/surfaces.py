@@ -1479,6 +1479,12 @@ class Interface:
                 "orig_ind", list(range(len(unrelaxed_structure)))
             )
 
+            unrelaxed_hydrogen_inds = np.where(
+                np.array(unrelaxed_structure.atomic_numbers) == 1
+            )[0]
+
+            unrelaxed_structure.remove_sites(unrelaxed_hydrogen_inds)
+
             is_negative = np.linalg.det(unrelaxed_structure.lattice.matrix) < 0
 
             if is_negative:
@@ -1604,10 +1610,13 @@ class Interface:
             relaxed_structure_file
         )
         init_ortho_structure = self._orthogonal_structure
+        non_hydrogen_inds = np.array(init_ortho_structure.atomic_numbers) != 1
+        new_coords = init_ortho_structure.cart_coords
+        new_coords[non_hydrogen_inds] += relaxation_shifts
         relaxed_ortho_structure = Structure(
             lattice=init_ortho_structure.lattice,
             species=init_ortho_structure.species,
-            coords=init_ortho_structure.cart_coords + relaxation_shifts,
+            coords=new_coords,
             to_unit_cell=True,
             coords_are_cartesian=True,
             site_properties=init_ortho_structure.site_properties,
@@ -1621,10 +1630,15 @@ class Interface:
         ) = self._get_film_and_substrate_parts(relaxed_ortho_structure)
 
         init_non_ortho_structure = self._non_orthogonal_structure
+        non_hydrogen_inds = (
+            np.array(init_non_ortho_structure.atomic_numbers) != 1
+        )
+        new_coords = init_non_ortho_structure.cart_coords
+        new_coords[non_hydrogen_inds] += relaxation_shifts
         relaxed_non_ortho_structure = Structure(
             lattice=init_non_ortho_structure.lattice,
             species=init_non_ortho_structure.species,
-            coords=init_non_ortho_structure.cart_coords + relaxation_shifts,
+            coords=new_coords,
             to_unit_cell=True,
             coords_are_cartesian=True,
             site_properties=init_non_ortho_structure.site_properties,
