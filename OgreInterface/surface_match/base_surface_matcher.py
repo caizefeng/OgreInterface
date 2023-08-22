@@ -339,10 +339,15 @@ class BaseSurfaceMatcher:
         y_grid = np.linspace(0, 1, self.grid_density_y)
         X, Y = np.meshgrid(x_grid, y_grid)
 
-        Z = (
-            -((film_energy + sub_energy) - interface_energy)
-            / self.interface.area
-        )
+        N_sub_layers = self.interface.substrate.layers
+        N_film_layers = self.interface.film.layers
+        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
+        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
+
+        sub_obs = sub_energy * N_sub_sc * N_sub_layers
+        film_obs = film_energy * N_film_sc * N_film_layers
+
+        Z = (interface_energy - film_obs - sub_obs) / (2 * self.interface.area)
 
         a = self.matrix[0, :2]
         b = self.matrix[1, :2]
@@ -420,8 +425,16 @@ class BaseSurfaceMatcher:
         Returns:
             The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
         """
-        interface_energy = (
-            -((film_energy + sub_energy) - energies) / self.interface.area
+        N_sub_layers = self.interface.substrate.layers
+        N_film_layers = self.interface.film.layers
+        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
+        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
+
+        sub_obs = sub_energy * N_sub_sc * N_sub_layers
+        film_obs = film_energy * N_film_sc * N_film_layers
+
+        interface_energy = (energies - film_obs - sub_obs) / (
+            2 * self.interface.area
         )
 
         fig, axs = plt.subplots(
@@ -493,12 +506,12 @@ class BaseSurfaceMatcher:
 
         return frac_abc[:, :2]
 
-    def get_optmized_structure(self):
-        opt_shift = self.opt_xy_shift
+    # def get_optmized_structure(self):
+    #     opt_shift = self.opt_xy_shift
 
-        self.interface.shift_film_inplane(
-            x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
-        )
+    #     self.interface.shift_film_inplane(
+    #         x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
+    #     )
 
     def _plot_heatmap(
         self, fig, ax, X, Y, Z, cmap, fontsize, show_max, add_color_bar

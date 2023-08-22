@@ -88,9 +88,12 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         )
 
         self.iface = self.interface.get_interface(orthogonal=True)
+        self._add_born_ns(self.iface)
+        self._add_charges(self.iface)
         self.iface_inputs = self._generate_base_inputs(structure=self.iface)
 
         self.opt_xy_shift[:2] = 0.0
+        self.d_interface = self.opt_d_interface
 
     def _add_charges(self, struc):
         charges = [
