@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "OgreInterface"
-version = "1.0.28"
+version = "1.0.29"
 description = "A Python library used to generate and optimize epitaxial inorganic interface structures."
 authors = [{name = "Derek Dardzinski", email = "dardzinski.derek@gmail.com"}]
 dependencies = ["pymatgen", "matplotlib", "numpy", "tqdm", "ase", "torch", "pyswarms"]
