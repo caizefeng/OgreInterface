@@ -9,11 +9,11 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.core.periodic_table import Element, Species
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
-from pymatgen.symmetry.analyzer import SymmOp
+from pymatgen.symmetry.analyzer import SymmOp, SpacegroupAnalyzer
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
 from pymatgen.analysis.local_env import CrystalNN, BrunnerNN_real
 
-from typing import Dict, Union, Iterable, List, Tuple
+from typing import Dict, Union, Iterable, List, Tuple, TypeVar
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon, Circle, Shadow
 from matplotlib.colors import to_rgb, to_rgba
@@ -27,6 +27,9 @@ import warnings
 
 # suppress warning from CrystallNN when ionic radii are not found.
 warnings.filterwarnings("ignore", module=r"pymatgen.analysis.local_env")
+
+SelfSurface = TypeVar("SelfSurface", bound="Surface")
+SelfInterface = TypeVar("SelfInterface", bound="Interface")
 
 
 class Surface:
@@ -1022,8 +1025,8 @@ class Interface:
 
     def __init__(
         self,
-        substrate: Surface,
-        film: Surface,
+        substrate: Union[Surface, SelfInterface],
+        film: Union[Surface, SelfInterface],
         match: OgreMatch,
         interfacial_distance: float,
         vacuum: float,
@@ -1053,7 +1056,7 @@ class Interface:
 
         self.interfacial_distance = interfacial_distance
         self._strained_sub = self._substrate_supercell
-        self._strained_film = self._prepare_film()
+        self._strained_film, self._strained_film_obs = self._prepare_film()
 
         (
             self._M_matrix,
@@ -1072,6 +1075,66 @@ class Interface:
         ) = self._stack_interface()
         self._a_shift = 0.0
         self._b_shift = 0.0
+        self.bottom_layer_dist = self.substrate.bottom_layer_dist
+        self.top_layer_dist = self.film.top_layer_dist
+
+    @property
+    def inplane_vectors(self) -> np.ndarray:
+        """
+        In-plane cartesian vectors of the interface structure
+
+        Examples:
+            >>> interface.inplane_vectors
+            >>> [[4.0 0.0 0.0]
+            ...  [2.0 2.0 0.0]]
+
+        Returns:
+            (2, 3) numpy array containing the cartesian coordinates of the in-place lattice vectors
+        """
+        matrix = deepcopy(self._orthogonal_structure.lattice.matrix)
+        return matrix[:2]
+
+    @property
+    def uvw_basis(self) -> np.ndarray:
+        return np.eye(3).astype(int)
+
+    @property
+    def oriented_bulk_structure(self) -> Structure:
+        return self.substrate.oriented_bulk_structure
+
+    @property
+    def c_projection(self) -> float:
+        return self.substrate.c_projection
+
+    def _passivated(self) -> bool:
+        return self.substrate._passivated or self.film._passivated
+
+    @property
+    def _transformation_matrix(self) -> np.ndarray:
+        return self.substrate._transformation_matrix
+
+    @property
+    def surface_normal(self) -> np.ndarray:
+        return self.substrate.surface_normal
+
+    @property
+    def layers(self) -> int:
+        return self.substrate.layers + self.film.layers
+
+    @property
+    def termination_index(self) -> int:
+        return 0
+
+    @property
+    def point_group_operations(self) -> np.ndarray:
+        sg = SpacegroupAnalyzer(self._orthogonal_structure)
+        point_group_operations = sg.get_point_group_operations(cartesian=False)
+        operation_array = np.round(
+            np.array([p.rotation_matrix for p in point_group_operations])
+        ).astype(np.int8)
+        unique_operations = np.unique(operation_array, axis=0)
+
+        return unique_operations
 
     @property
     def transformation_matrix(self):
@@ -1912,11 +1975,40 @@ class Interface:
     ) -> Tuple[Structure, np.ndarray, np.ndarray]:
         if substrate:
             matrix = self.match.substrate_sl_transform
-            supercell = self.substrate._non_orthogonal_slab_structure.copy()
+
+            if type(self.substrate) == Surface:
+                supercell = (
+                    self.substrate._non_orthogonal_slab_structure.copy()
+                )
+            elif type(self.substrate) == Interface:
+                supercell = self.substrate._non_orthogonal_structure.copy()
+                layer_index = np.array(
+                    supercell.site_properties["layer_index"]
+                )
+                not_hydrogen = layer_index != -1
+                is_film = supercell.site_properties["is_film"]
+                is_sub = supercell.site_properties["is_sub"]
+                layer_index[(is_film & not_hydrogen)] += (
+                    layer_index[is_sub].max() + 1
+                )
+                supercell.add_site_property("layer_index", layer_index)
+
             basis = self.substrate.uvw_basis
         else:
             matrix = self.match.film_sl_transform
-            supercell = self.film._non_orthogonal_slab_structure.copy()
+
+            if type(self.film) == Surface:
+                supercell = self.film._non_orthogonal_slab_structure.copy()
+            elif type(self.film) == Interface:
+                supercell = self.film._non_orthogonal_structure.copy()
+                layer_index = np.array(
+                    supercell.site_properties["layer_index"]
+                )
+                is_film = supercell.site_properties["is_film"]
+                is_sub = supercell.site_properties["is_sub"]
+                layer_index[is_film] += layer_index[is_sub].max() + 1
+                supercell.add_site_property("layer_index", layer_index)
+
             basis = self.film.uvw_basis
 
         supercell.make_supercell(scaling_matrix=matrix)
@@ -1982,6 +2074,20 @@ class Interface:
         # Maintain constant volume
         strained_matrix[-1] *= scale_factor
 
+        strain_matrix = np.linalg.inv(sc_matrix) @ strained_matrix
+        film_obs = self.film.oriented_bulk_structure
+        unstrained_obs_matrix = film_obs.lattice.matrix
+        strained_obs_matrix = unstrained_obs_matrix.dot(strain_matrix.T)
+
+        strained_film_obs = Structure(
+            lattice=Lattice(strained_obs_matrix),
+            species=film_obs.species,
+            coords=film_obs.frac_coords,
+            to_unit_cell=True,
+            coords_are_cartesian=False,
+            site_properties=film_obs.site_properties,
+        )
+
         strained_film = Structure(
             lattice=Lattice(strained_matrix),
             species=supercell_slab.species,
@@ -2013,7 +2119,7 @@ class Interface:
             site_properties=strained_film.site_properties,
         )
 
-        return oriented_film
+        return oriented_film, strained_film_obs
 
     # def _prepare_film_old(self) -> Structure:
     #     supercell_slab = self._film_supercell
@@ -2297,6 +2403,8 @@ class Interface:
             key: strained_sub.site_properties[key]
             + strained_film.site_properties[key]
             for key in strained_sub.site_properties
+            if key in strained_sub.site_properties
+            and key in strained_film.site_properties
         }
         interface_site_properties["is_sub"] = np.array(
             [True] * len(strained_sub) + [False] * len(strained_film)

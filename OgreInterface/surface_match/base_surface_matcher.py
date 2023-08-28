@@ -45,7 +45,7 @@ class BaseSurfaceMatcher:
         self.interface = interface
 
         self.iface = self.interface.get_interface(orthogonal=True)
-        self.film_part = self.interface.film.oriented_bulk_structure.copy()
+        self.film_part = self.interface._strained_film_obs.copy()
         self.sub_part = self.interface.substrate.oriented_bulk_structure.copy()
         self.film_part.add_site_property(
             "is_film",

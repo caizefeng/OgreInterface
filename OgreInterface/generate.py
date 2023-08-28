@@ -1,7 +1,10 @@
 """
 This module will be used to construct the surfaces and interfaces used in this package.
 """
-from OgreInterface.surfaces import Surface, Interface
+from OgreInterface.surfaces import (
+    Surface,
+    Interface,
+)
 from OgreInterface import utils
 from OgreInterface.lattice_match import ZurMcGill, OgreMatch
 
@@ -757,23 +760,28 @@ class SurfaceGenerator(Sequence):
         bottom_breaks = 0
         top_breaks = 0
         for obe in oriented_bulk_equivalents:
-            ind = np.where(obs_oriented_bulk_equivalent == obe)[0][0]
-            center_coord = obs[ind].coords
-            bonds = np.vstack([bond["bond"] for bond in neighbor_info[obe]])
-            bonds += center_coord
-            frac_bonds = bonds.dot(obs.lattice.inv_matrix)
-            images = np.round(frac_bonds - np.mod(frac_bonds, 1)).astype(int)
+            if len(neighbor_info[obe]) > 0:
+                ind = np.where(obs_oriented_bulk_equivalent == obe)[0][0]
+                center_coord = obs[ind].coords
+                bonds = np.vstack(
+                    [bond["bond"] for bond in neighbor_info[obe]]
+                )
+                bonds += center_coord
+                frac_bonds = bonds.dot(obs.lattice.inv_matrix)
+                images = np.round(frac_bonds - np.mod(frac_bonds, 1)).astype(
+                    int
+                )
 
-            bottom_broken_bonds = (images[:, -1] < 0).sum()
-            top_broken_bonds = (images[:, -1] > 0).sum()
+                bottom_broken_bonds = (images[:, -1] < 0).sum()
+                top_broken_bonds = (images[:, -1] > 0).sum()
 
-            if bottom_broken_bonds > 0:
-                bottom_breaks += bottom_broken_bonds
-                bottom_surf.append(obe)
+                if bottom_broken_bonds > 0:
+                    bottom_breaks += bottom_broken_bonds
+                    bottom_surf.append(obe)
 
-            if top_broken_bonds > 0:
-                top_breaks += top_broken_bonds
-                top_surf.append(obe)
+                if top_broken_bonds > 0:
+                    top_breaks += top_broken_bonds
+                    top_surf.append(obe)
 
         is_top = np.isin(obs_oriented_bulk_equivalent, top_surf)
         is_bot = np.isin(obs_oriented_bulk_equivalent, bottom_surf)
@@ -1118,15 +1126,11 @@ class MolecularSurfaceGenerator(SurfaceGenerator):
         lazy: bool = False,
     ) -> None:
         # Get the primitive structure to label the molecuels
-        prim_bulk = bulk.get_primitive_structure()
-        print(
-            "TODO: Use spglib for molecular crystals. Need to think about indexing more"
+        prim_bulk = utils.spglib_standardize(
+            bulk,
+            to_primitive=True,
+            no_idealize=True,
         )
-        # prim_bulk = utils.spglib_standardize(
-        #     bulk,
-        #     to_primitive=True,
-        #     no_idealize=True,
-        # )
 
         # Get the primitive to conventional transformation matrix
         prim_to_conv = np.round(utils.conv_a_to_b(prim_bulk, bulk), 3)
@@ -1144,13 +1148,6 @@ class MolecularSurfaceGenerator(SurfaceGenerator):
         # Revert back to the supercell for the input into the SurfaceGenerator
         labeled_bulk = prim_bulk.copy()
         labeled_bulk.make_supercell(prim_to_conv)
-        # dummy_bulk = utils.replace_molecules_with_atoms(labeled_bulk)
-
-        # Poscar(labeled_bulk).write_file("vis/POSCAR_mol_bulk")
-        # utils._get_colored_molecules(
-        #     labeled_bulk, "vis/POSCAR_mol_bulk_colored"
-        # )
-        # utils._get_colored_molecules(dummy_bulk, "vis/POSCAR_com_bulk_colored")
 
         super().__init__(
             bulk=labeled_bulk,
@@ -1164,11 +1161,9 @@ class MolecularSurfaceGenerator(SurfaceGenerator):
 
         # Extract the oriented bulk structure
         obs = self.oriented_bulk_structure
-        # utils._get_colored_molecules(obs, "vis/POSCAR_mol_obs_colored")
 
         # Replace the molecules with their cooresponding dummy atoms at their center of mass
         dummy_obs = utils.replace_molecules_with_atoms(obs)
-        # utils._get_colored_molecules(dummy_obs, "vis/POSCAR_com_obs_colored")
 
         # Add oriented_bulk_equivalent site property
         dummy_obs.add_site_property(
@@ -1279,8 +1274,8 @@ class InterfaceGenerator:
 
     def __init__(
         self,
-        substrate: Surface,
-        film: Surface,
+        substrate: Union[Surface, Interface],
+        film: Union[Surface, Interface],
         max_area_mismatch: float = 0.01,
         max_angle_strain: float = 0.01,
         max_linear_strain: float = 0.01,
@@ -1289,18 +1284,18 @@ class InterfaceGenerator:
         vacuum: float = 40.0,
         center: bool = False,
     ):
-        if type(substrate) == Surface:
+        if type(substrate) == Surface or type(substrate) == Interface:
             self.substrate = substrate
         else:
             raise TypeError(
-                f"InterfaceGenerator accepts 'ogre.core.Surface' not '{type(substrate).__name__}'"
+                f"InterfaceGenerator accepts 'ogre.core.Surface' or 'ogre.core.Interface' not '{type(substrate).__name__}'"
             )
 
-        if type(film) == Surface:
+        if type(film) == Surface or type(film) == Interface:
             self.film = film
         else:
             raise TypeError(
-                f"InterfaceGenerator accepts 'ogre.core.Surface' not '{type(film).__name__}'"
+                f"InterfaceGenerator accepts 'ogre.core.Surface' or 'ogre.core.Interface' not '{type(film).__name__}'"
             )
 
         self.center = center
@@ -1311,6 +1306,16 @@ class InterfaceGenerator:
         self.interfacial_distance = interfacial_distance
         self.vacuum = vacuum
         self.match_list = self._generate_interface_props()
+
+    def _get_point_group_operations(self, struc: Structure) -> np.ndarray:
+        sg = SpacegroupAnalyzer(struc)
+        point_group_operations = sg.get_point_group_operations(cartesian=False)
+        operation_array = np.round(
+            np.array([p.rotation_matrix for p in point_group_operations])
+        ).astype(np.int8)
+        unique_operations = np.unique(operation_array, axis=0)
+
+        return unique_operations
 
     def _generate_interface_props(self):
         zm = ZurMcGill(
