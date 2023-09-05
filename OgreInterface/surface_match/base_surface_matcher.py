@@ -4,6 +4,7 @@ from OgreInterface.score_function.generate_inputs import (
     generate_input_dict_matscipy,
     create_batch,
 )
+from OgreInterface import utils
 from typing import List
 import numpy as np
 from matplotlib.colors import Normalize, ListedColormap
@@ -41,20 +42,36 @@ class BaseSurfaceMatcher:
         self,
         interface: Interface,
         grid_density: float = 2.5,
+        use_interface_energy: bool = True,
     ):
         self.interface = interface
+        self.use_interface_energy = use_interface_energy
 
-        self.iface = self.interface.get_interface(orthogonal=True)
-        self.film_part = self.interface._strained_film_obs.copy()
-        self.sub_part = self.interface.substrate.oriented_bulk_structure.copy()
-        self.film_part.add_site_property(
-            "is_film",
-            [True] * len(self.film_part),
-        )
-        self.sub_part.add_site_property(
-            "is_film",
-            [False] * len(self.sub_part),
-        )
+        self.iface = self.interface.get_interface(orthogonal=True).copy()
+
+        if self.interface._passivated:
+            H_inds = np.where(np.array(self.iface.atomic_numbers) == 1)[0]
+            self.iface.remove_sites(H_inds)
+
+        if self.use_interface_energy:
+            self.film_part = utils.apply_strain_matrix(
+                structure=self.interface.film.oriented_bulk_structure.copy(),
+                strain_matrix=self.interface._strain_matrix,
+            )
+            self.sub_part = (
+                self.interface.substrate.oriented_bulk_structure.copy()
+            )
+            self.film_part.add_site_property(
+                "is_film",
+                [True] * len(self.film_part),
+            )
+            self.sub_part.add_site_property(
+                "is_film",
+                [False] * len(self.sub_part),
+            )
+        else:
+            self.film_part = self.interface.get_film_supercell().copy()
+            self.sub_part = self.interface.get_substrate_supercell().copy()
 
         self.matrix = deepcopy(interface._orthogonal_structure.lattice.matrix)
         self._vol = np.linalg.det(self.matrix)
@@ -79,34 +96,32 @@ class BaseSurfaceMatcher:
             total_energies - self.film_energy - self.sub_energy
         ) / (2 * self.interface.area)
 
-        return interface_energies
+        if self.use_interface_energy:
+            return interface_energies
+        else:
+            return 2 * interface_energies
 
-    def _generate_base_inputs(self, structure: Structure):
-        # s = time.time()
-        # inputs = generate_input_dict(
-        #     structure=structure,
-        #     cutoff=self._cutoff,
-        #     interface=True,
-        # )
-        # print("Torch Time = ", time.time() - s)
-        # s = time.time()
+    def _generate_base_inputs(
+        self,
+        structure: Structure,
+        is_slab: bool = True,
+    ):
         inputs = generate_input_dict(
             structure=structure,
             cutoff=self._cutoff,
-            interface=True,
-        )
-        # print("Matscipy Time = ", time.time() - s)
-
-        return inputs
-
-    def _generate_bulk_inputs(self, structure: Structure):
-        inputs = generate_input_dict(
-            structure=structure,
-            cutoff=self._cutoff,
-            interface=False,
+            interface=is_slab,
         )
 
         return inputs
+
+    # def _generate_bulk_inputs(self, structure: Structure):
+    #     inputs = generate_input_dict(
+    #         structure=structure,
+    #         cutoff=self._cutoff,
+    #         interface=False,
+    #     )
+
+    #     return inputs
 
     def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 15):
         bounds = (
@@ -505,13 +520,6 @@ class BaseSurfaceMatcher:
         frac_abc = np.mod(frac_abc, 1)
 
         return frac_abc[:, :2]
-
-    # def get_optmized_structure(self):
-    #     opt_shift = self.opt_xy_shift
-
-    #     self.interface.shift_film_inplane(
-    #         x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
-    #     )
 
     def _plot_heatmap(
         self, fig, ax, X, Y, Z, cmap, fontsize, show_max, add_color_bar
@@ -1052,3 +1060,27 @@ class BaseSurfaceMatcher:
         plt.close(fig)
 
         return opt_E
+
+    def get_current_energy(
+        self,
+    ):
+        """This function calculates the energy of the current interface structure
+
+        Returns:
+            Interface or Adhesion energy of the interface
+        """
+        inputs = create_batch(self.iface_inputs, batch_size=1)
+
+        (
+            total_energy,
+            _,
+            _,
+            _,
+            _,
+        ) = self._calculate(inputs, shifts=np.zeros((1, 3)))
+
+        interface_energy = self._get_interface_energy(
+            total_energies=total_energy,
+        )
+
+        return interface_energy[0]

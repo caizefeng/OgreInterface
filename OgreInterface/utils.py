@@ -31,6 +31,29 @@ def _get_colored_molecules(struc, output):
     Poscar(colored_struc).write_file(output)
 
 
+def apply_strain_matrix(
+    structure: Structure, strain_matrix: np.ndarray
+) -> Structure:
+    """
+    This function applies a strain matrix to a structure to match it to another lattice
+    i.e. straining a film to match with the substrate material. The strain_matrix can be calculated
+    by the following equation:
+        strain_matrix = np.linalg.inv(old_lattice_matrix) @ new_lattice_matrix
+    """
+    new_matrix = structure.lattice.matrix @ strain_matrix
+
+    strained_structure = Structure(
+        lattice=Lattice(new_matrix),
+        species=structure.species,
+        coords=structure.frac_coords,
+        to_unit_cell=True,
+        coords_are_cartesian=False,
+        site_properties=structure.site_properties,
+    )
+
+    return strained_structure
+
+
 def spglib_standardize(
     structure: Structure,
     to_primitive: bool = False,
@@ -247,6 +270,12 @@ def get_layer_supercelll(
         k: v * layers for k, v in structure.site_properties.items()
     }
     new_site_properties["layer_index"] = sc_layer_inds.tolist()
+
+    if "atomic_layer_index" in new_site_properties:
+        atomic_layers = np.array(new_site_properties["atomic_layer_index"])
+        offset = (atomic_layers.max() * sc_layer_inds) + sc_layer_inds
+        new_atomic_layers = atomic_layers + offset
+        new_site_properties["atomic_layer_index"] = new_atomic_layers
 
     layer_transform = np.eye(3)
     layer_transform[-1, -1] = layers + vacuum_scale

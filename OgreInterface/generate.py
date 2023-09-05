@@ -854,6 +854,20 @@ class SurfaceGenerator(Sequence):
         z_coords = slab_base.frac_coords[:, -1]
         bot_z = z_coords.min()
         top_z = z_coords.max()
+        unique_z = np.unique(np.round(z_coords, 5))
+        z_groups = [
+            (i, np.where(np.isclose(z_coords, z))[0])
+            for i, z in enumerate(unique_z)
+        ]
+        atomic_layers = np.zeros(len(z_coords))
+
+        for layer_num, inds in z_groups:
+            atomic_layers[inds] = layer_num
+
+        slab_base.add_site_property(
+            "atomic_layer_index",
+            atomic_layers.tolist(),
+        )
 
         max_z_inds = np.where(np.isclose(top_z, z_coords))[0]
 
@@ -875,12 +889,12 @@ class SurfaceGenerator(Sequence):
         )
 
         slab_base = Structure(
-            lattice=self.oriented_bulk_structure.lattice,
-            species=self.oriented_bulk_structure.species,
+            lattice=slab_base.lattice,
+            species=slab_base.species,
             coords=np.round(slab_base.frac_coords, 6),
             to_unit_cell=True,
             coords_are_cartesian=False,
-            site_properties=self.oriented_bulk_structure.site_properties,
+            site_properties=slab_base.site_properties,
         )
 
         bottom_layer_dist = np.abs(bot_z - (top_z - 1)) * init_matrix[-1, -1]

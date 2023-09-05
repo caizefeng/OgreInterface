@@ -179,7 +179,9 @@ class Surface:
         else:
             return return_struc
 
-    def get_layer_indices(self, layer: int) -> np.ndarray:
+    def get_layer_indices(
+        self, layer: int, atomic_layers: bool = True
+    ) -> np.ndarray:
         """
         This function is used to extract the atom-indicies of specific layers of the surface.
 
@@ -189,14 +191,34 @@ class Surface:
 
         Args:
             layer: The layer number of the surface which you would like to get atom-indices for.
+            atomic_layers: Determines if it is in terms of atomic layers or unit cell layers
 
         Returns:
             A numpy array of integer indices corresponding to the atom index of the surface structure
         """
+        if atomic_layers:
+            layer_key = "atomic_layer_index"
+        else:
+            layer_key = "layer_index"
+
         surface = self._non_orthogonal_slab_structure
         site_props = surface.site_properties
-        layer_index = np.array(site_props["layer_index"])
+        layer_index = np.array(site_props[layer_key])
         return np.where(layer_index == layer)[0]
+
+    @property
+    def atomic_layers(self) -> int:
+        """
+        This function will return the number of atomic layers in the slab
+        """
+        return int(
+            max(
+                self._non_orthogonal_slab_structure.site_properties[
+                    "atomic_layer_index"
+                ]
+            )
+            + 1
+        )
 
     @property
     def slab_transformation_matrix(self) -> np.ndarray:
@@ -1039,11 +1061,13 @@ class Interface:
         self.vacuum = vacuum
         (
             self._substrate_supercell,
+            self._substrate_obs_supercell,
             self._substrate_supercell_uvw,
             self._substrate_supercell_scale_factors,
         ) = self._create_supercell(substrate=True)
         (
             self._film_supercell,
+            self._film_obs_supercell,
             self._film_supercell_uvw,
             self._film_supercell_scale_factors,
         ) = self._create_supercell(substrate=False)
@@ -1056,7 +1080,7 @@ class Interface:
 
         self.interfacial_distance = interfacial_distance
         self._strained_sub = self._substrate_supercell
-        self._strained_film, self._strained_film_obs = self._prepare_film()
+        self._strained_film, self._strain_matrix = self._prepare_film()
 
         (
             self._M_matrix,
@@ -1103,6 +1127,24 @@ class Interface:
         return self.substrate.oriented_bulk_structure
 
     @property
+    def substrate_oriented_bulk_supercell(self) -> Structure:
+        if self._substrate_obs_supercell is not None:
+            return self._substrate_obs_supercell
+        else:
+            raise "substrate_oriented_bulk_supercell is not applicable when an Interface is used as the substrate"
+
+    @property
+    def film_oriented_bulk_supercell(self) -> Structure:
+        if self._film_obs_supercell is not None:
+            obs_supercell = utils.apply_strain_matrix(
+                structure=self._film_obs_supercell,
+                strain_matrix=self._strain_matrix,
+            )
+            return obs_supercell
+        else:
+            raise "substrate_oriented_bulk_supercell is not applicable when an Interface is used as the substrate"
+
+    @property
     def c_projection(self) -> float:
         return self.substrate.c_projection
 
@@ -1120,6 +1162,10 @@ class Interface:
     @property
     def layers(self) -> int:
         return self.substrate.layers + self.film.layers
+
+    @property
+    def atomic_layers(self) -> int:
+        return self.substrate.atomic_layers + self.film.atomic_layers
 
     @property
     def termination_index(self) -> int:
@@ -1231,7 +1277,9 @@ class Interface:
                 return self._non_orthogonal_film_structure
 
     def get_substrate_layer_indices(
-        self, layer_from_interface: int
+        self,
+        layer_from_interface: int,
+        atomic_layers: bool = True,
     ) -> np.ndarray:
         """
         This function is used to extract the atom-indicies of specific layers of the substrate part of the interface.
@@ -1249,17 +1297,26 @@ class Interface:
         Returns:
             A numpy array of integer indices corresponding to the atom index of the interface structure
         """
+        if atomic_layers:
+            layer_key = "atomic_layer_index"
+        else:
+            layer_key = "layer_index"
+
         interface = self._non_orthogonal_structure
         site_props = interface.site_properties
         is_sub = np.array(site_props["is_sub"])
-        layer_index = np.array(site_props["layer_index"])
-        sub_n_layers = self.substrate.layers - 1
+        layer_index = np.array(site_props[layer_key])
+        sub_n_layers = layer_index.max()
         rel_layer_index = sub_n_layers - layer_index
         is_layer = rel_layer_index == layer_from_interface
 
         return np.where(np.logical_and(is_sub, is_layer))[0]
 
-    def get_film_layer_indices(self, layer_from_interface: int) -> np.ndarray:
+    def get_film_layer_indices(
+        self,
+        layer_from_interface: int,
+        atomic_layers: bool = True,
+    ) -> np.ndarray:
         """
         This function is used to extract the atom-indicies of specific layers of the film part of the interface.
 
@@ -1275,10 +1332,15 @@ class Interface:
         Returns:
             A numpy array of integer indices corresponding to the atom index of the interface structure
         """
+        if atomic_layers:
+            layer_key = "atomic_layer_index"
+        else:
+            layer_key = "layer_index"
+
         interface = self._non_orthogonal_structure
         site_props = interface.site_properties
         is_film = np.array(site_props["is_film"])
-        layer_index = np.array(site_props["layer_index"])
+        layer_index = np.array(site_props[layer_key])
         is_layer = layer_index == layer_from_interface
 
         return np.where(np.logical_and(is_film, is_layer))[0]
@@ -1972,7 +2034,7 @@ class Interface:
 
     def _create_supercell(
         self, substrate: bool = True
-    ) -> Tuple[Structure, np.ndarray, np.ndarray]:
+    ) -> Tuple[Structure, Structure, np.ndarray, np.ndarray]:
         if substrate:
             matrix = self.match.substrate_sl_transform
 
@@ -1980,18 +2042,24 @@ class Interface:
                 supercell = (
                     self.substrate._non_orthogonal_slab_structure.copy()
                 )
+                obs_supercell = self.substrate.oriented_bulk_structure.copy()
             elif type(self.substrate) == Interface:
                 supercell = self.substrate._non_orthogonal_structure.copy()
-                layer_index = np.array(
-                    supercell.site_properties["layer_index"]
-                )
-                not_hydrogen = layer_index != -1
-                is_film = supercell.site_properties["is_film"]
-                is_sub = supercell.site_properties["is_sub"]
-                layer_index[(is_film & not_hydrogen)] += (
-                    layer_index[is_sub].max() + 1
-                )
-                supercell.add_site_property("layer_index", layer_index)
+                obs_supercell = None
+
+                layer_keys = ["layer_index", "atomic_layer_index"]
+
+                for layer_key in layer_keys:
+                    layer_index = np.array(
+                        supercell.site_properties[layer_key]
+                    )
+                    not_hydrogen = layer_index != -1
+                    is_film = supercell.site_properties["is_film"]
+                    is_sub = supercell.site_properties["is_sub"]
+                    layer_index[(is_film & not_hydrogen)] += (
+                        layer_index[is_sub].max() + 1
+                    )
+                    supercell.add_site_property(layer_key, layer_index)
 
             basis = self.substrate.uvw_basis
         else:
@@ -1999,19 +2067,28 @@ class Interface:
 
             if type(self.film) == Surface:
                 supercell = self.film._non_orthogonal_slab_structure.copy()
+                obs_supercell = self.film.oriented_bulk_structure.copy()
             elif type(self.film) == Interface:
                 supercell = self.film._non_orthogonal_structure.copy()
-                layer_index = np.array(
-                    supercell.site_properties["layer_index"]
-                )
-                is_film = supercell.site_properties["is_film"]
-                is_sub = supercell.site_properties["is_sub"]
-                layer_index[is_film] += layer_index[is_sub].max() + 1
-                supercell.add_site_property("layer_index", layer_index)
+                obs_supercell = None
+
+                layer_keys = ["layer_index", "atomic_layer_index"]
+
+                for layer_key in layer_keys:
+                    layer_index = np.array(
+                        supercell.site_properties[layer_key]
+                    )
+                    is_film = supercell.site_properties["is_film"]
+                    is_sub = supercell.site_properties["is_sub"]
+                    layer_index[is_film] += layer_index[is_sub].max() + 1
+                    supercell.add_site_property(layer_key, layer_index)
 
             basis = self.film.uvw_basis
 
         supercell.make_supercell(scaling_matrix=matrix)
+
+        if obs_supercell is not None:
+            obs_supercell.make_supercell(scaling_matrix=matrix)
 
         uvw_supercell = matrix @ basis
         scale_factors = []
@@ -2020,7 +2097,7 @@ class Interface:
             uvw_supercell[i] = uvw_supercell[i] / scale
             scale_factors.append(scale)
 
-        return supercell, uvw_supercell, scale_factors
+        return supercell, obs_supercell, uvw_supercell, scale_factors
 
     def _orient_supercell(self, supercell: Structure) -> np.ndarray:
         matrix = deepcopy(supercell.lattice.matrix)
@@ -2073,20 +2150,7 @@ class Interface:
 
         # Maintain constant volume
         strained_matrix[-1] *= scale_factor
-
         strain_matrix = np.linalg.inv(sc_matrix) @ strained_matrix
-        film_obs = self.film.oriented_bulk_structure
-        unstrained_obs_matrix = film_obs.lattice.matrix
-        strained_obs_matrix = unstrained_obs_matrix.dot(strain_matrix.T)
-
-        strained_film_obs = Structure(
-            lattice=Lattice(strained_obs_matrix),
-            species=film_obs.species,
-            coords=film_obs.frac_coords,
-            to_unit_cell=True,
-            coords_are_cartesian=False,
-            site_properties=film_obs.site_properties,
-        )
 
         strained_film = Structure(
             lattice=Lattice(strained_matrix),
@@ -2119,7 +2183,7 @@ class Interface:
             site_properties=strained_film.site_properties,
         )
 
-        return oriented_film, strained_film_obs
+        return oriented_film, strain_matrix
 
     # def _prepare_film_old(self) -> Structure:
     #     supercell_slab = self._film_supercell
@@ -2730,12 +2794,9 @@ class Interface:
         fc = np.round(cart_coords.dot(sc_inv_matrix), 3)
         if is_film:
             if strain:
-                strain_matrix = (
-                    self._film_supercell.lattice.inv_matrix
-                    @ self._strained_sub.lattice.matrix
-                )
+                strain_matrix = self._strain_matrix
                 strain_matrix[-1] = np.array([0, 0, 1])
-                plot_coords = cart_coords.dot(strain_matrix)
+                plot_coords = cart_coords @ strain_matrix
             else:
                 plot_coords = cart_coords
 
@@ -2811,20 +2872,9 @@ class Interface:
         film_struc.apply_operation(film_a_to_i_op)
 
         if strain:
-            unstrained_film_matrix = film_struc.lattice.matrix
-            strain_matrix = (
-                self._film_supercell.lattice.inv_matrix
-                @ self._strained_sub.lattice.matrix
-            )
-            strain_matrix[-1] = np.array([0, 0, 1])
-            strained_matrix = unstrained_film_matrix.dot(strain_matrix.T)
-            film_struc = Structure(
-                lattice=Lattice(strained_matrix),
-                species=film_struc.species,
-                coords=film_struc.frac_coords,
-                to_unit_cell=True,
-                coords_are_cartesian=False,
-                site_properties=film_struc.site_properties,
+            film_struc = utils.apply_strain_matrix(
+                structure=film_struc,
+                strain_matrix=self._strain_matrix,
             )
 
         sub_matrix = sub_struc.lattice.matrix

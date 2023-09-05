@@ -46,12 +46,14 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self,
         interface: Interface,
         grid_density: float = 2.5,
+        use_interface_energy: bool = True,
         auto_determine_born_n: bool = True,
         born_n: float = 12.0,
     ):
         super().__init__(
             interface=interface,
             grid_density=grid_density,
+            use_interface_energy=use_interface_energy,
         )
         self._auto_determine_born_n = auto_determine_born_n
         self._born_n = born_n
@@ -72,9 +74,18 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self.opt_xy_shift = np.zeros(2)
         self.opt_d_interface = self.d_interface
 
-        self.iface_inputs = self._generate_base_inputs(structure=self.iface)
-        self.sub_inputs = self._generate_bulk_inputs(structure=self.sub_part)
-        self.film_inputs = self._generate_bulk_inputs(structure=self.film_part)
+        self.iface_inputs = self._generate_base_inputs(
+            structure=self.iface,
+            is_slab=True,
+        )
+        self.sub_inputs = self._generate_base_inputs(
+            structure=self.sub_part,
+            is_slab=(not self.use_interface_energy),
+        )
+        self.film_inputs = self._generate_base_inputs(
+            structure=self.film_part,
+            is_slab=(not self.use_interface_energy),
+        )
         self.film_energy, self.sub_energy = self._get_film_sub_energies()
 
     def get_optimized_structure(self):
@@ -87,10 +98,18 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             interfacial_distance=self.opt_d_interface
         )
 
-        self.iface = self.interface.get_interface(orthogonal=True)
+        self.iface = self.interface.get_interface(orthogonal=True).copy()
+
+        if self.interface._passivated:
+            H_inds = np.where(np.array(self.iface.atomic_numbers) == 1)[0]
+            self.iface.remove_sites(H_inds)
+
         self._add_born_ns(self.iface)
         self._add_charges(self.iface)
-        self.iface_inputs = self._generate_base_inputs(structure=self.iface)
+        self.iface_inputs = self._generate_base_inputs(
+            structure=self.iface,
+            is_slab=True,
+        )
 
         self.opt_xy_shift[:2] = 0.0
         self.d_interface = self.opt_d_interface
@@ -103,6 +122,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
     def _add_born_ns(self, struc):
         ion_config_to_n_map = {
+            "1s1": 0.0,
             "[He]": 5.0,
             "[Ne]": 7.0,
             "[Ar]": 9.0,
@@ -240,6 +260,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
                 d = float(
                     element.ionic_radii[charge_dict[chemical_symbols[n]]]
                 )
+
             except KeyError:
                 print(
                     f"No ionic radius available for {chemical_symbols[n]}, using the atomic radius instead"
@@ -344,14 +365,20 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             shifts=np.zeros((1, 3)),
         )
 
-        N_sub_layers = self.interface.substrate.layers
-        N_film_layers = self.interface.film.layers
-        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
-        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
-        film_scale = N_film_layers * N_film_sc
-        sub_scale = N_sub_layers * N_sub_sc
+        if self.use_interface_energy:
+            N_sub_layers = self.interface.substrate.layers
+            N_film_layers = self.interface.film.layers
+            N_sub_sc = np.linalg.det(
+                self.interface.match.substrate_sl_transform
+            )
+            N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
+            film_scale = N_film_layers * N_film_sc
+            sub_scale = N_sub_layers * N_sub_sc
 
-        return film_scale * film_energy, sub_scale * sub_energy
+            sub_energy *= sub_scale
+            film_energy *= film_scale
+
+        return film_energy, sub_energy
 
     def optimizePSO(
         self,
@@ -386,29 +413,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return opt_score
 
-    # def optimize(self, z_bounds, max_iters):
-    #     probe_xy = self._get_gd_init_points()
-    #     probe_xy = np.vstack([probe_xy, probe_xy])
-    #     probe_ab = self.get_frac_xy_shifts(probe_xy)
-    #     probe_z = np.random.uniform(
-    #         z_bounds[0],
-    #         z_bounds[1],
-    #         len(probe_ab),
-    #     )
-    #     probe_points = np.c_[probe_ab, probe_z]
-
-    #     opt_score, opt_pos = self._optimizer_old(
-    #         func=self.bo_function,
-    #         z_bounds=z_bounds,
-    #         max_iters=max_iters,
-    #         probe_points=probe_points,
-    #     )
-
-    #     self.opt_xy_shift = opt_pos[:2]
-    #     self.opt_d_interface = opt_pos[-1]
-
-    #     return opt_score
-
     def _calculate(self, inputs: Dict, shifts: np.ndarray):
         ionic_potential = IonicShiftedForcePotential(
             cutoff=self._cutoff,
@@ -421,245 +425,167 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return outputs
 
-    # def run_z_shift(
+    # def _run_bulk(
     #     self,
-    #     interfacial_distances,
+    #     strains,
     #     fontsize: int = 12,
     #     output: str = "PES.png",
     #     show_born_and_coulomb: bool = False,
     #     dpi: int = 400,
     # ):
-    #     zeros = np.zeros(len(interfacial_distances))
-    #     shifts = np.c_[zeros, zeros, interfacial_distances - self.d_interface]
+    #     # sub = self.interface.substrate.bulk_structure
+    #     sub = self.interface.film.bulk_structure
+    #     is_film = True
 
-    #     interface_energy = []
+    #     strained_atoms = []
+    #     for strain in strains:
+    #         strain_struc = sub.copy()
+    #         strain_struc.apply_strain(strain)
+    #         strain_struc.add_site_property(
+    #             "is_film", [is_film] * len(strain_struc)
+    #         )
+    #         self._add_charges(strain_struc)
+    #         self._add_born_ns(strain_struc)
+    #         strained_atoms.append(strain_struc)
+
+    #     total_energy = []
     #     coulomb = []
     #     born = []
-    #     for shift in shifts:
-    #         inputs = create_batch(self.iface_inputs, batch_size=1)
+    #     for i, atoms in enumerate(strained_atoms):
+    #         inputs = self._generate_base_inputs(
+    #             structure=atoms,
+    #         )
+    #         batch_inputs = create_batch(inputs, 1)
 
     #         (
-    #             _interface_energy,
+    #             _total_energy,
     #             _coulomb,
     #             _born,
     #             _,
     #             _,
-    #         ) = self._calculate(inputs, shifts=shift.reshape(1, -1))
-    #         interface_energy.append(_interface_energy)
+    #         ) = self._calculate(batch_inputs, shifts=np.zeros((1, 3)))
+    #         total_energy.append(_total_energy)
     #         coulomb.append(_coulomb)
     #         born.append(_born)
 
-    #     interface_energy = (
-    #         -(
-    #             (self.film_energy + self.sub_energy)
-    #             - np.array(interface_energy)
-    #         )
-    #         / self.interface.area
-    #     )
+    #     total_energy = np.array(total_energy)
+    #     coulomb = np.array(coulomb)
+    #     born = np.array(born)
 
-    #     fig, axs = plt.subplots(
-    #         figsize=(3, 3),
-    #         dpi=dpi,
-    #         # ncols=3,
-    #     )
+    #     fig, axs = plt.subplots(figsize=(4 * 3, 3), dpi=dpi, ncols=3)
+    #     print("Min Strain:", strains[np.argmin(total_energy)])
 
-    #     cs = CubicSpline(interfacial_distances, interface_energy)
-    #     new_x = np.linspace(
-    #         interfacial_distances.min(),
-    #         interfacial_distances.max(),
-    #         201,
-    #     )
-    #     new_y = cs(new_x)
-
-    #     opt_d = new_x[np.argmin(new_y)]
-    #     opt_E = np.min(new_y)
-    #     self.opt_d_interface = opt_d
-
-    #     axs.plot(
-    #         new_x,
-    #         new_y,
+    #     axs[0].plot(
+    #         strains,
+    #         total_energy,
     #         color="black",
     #         linewidth=1,
     #         label="Born+Coulomb",
     #     )
-    #     axs.scatter(
-    #         [opt_d],
-    #         [opt_E],
-    #         color="black",
-    #         marker="x",
+    #     axs[1].plot(
+    #         strains,
+    #         coulomb,
+    #         color="red",
+    #         linewidth=1,
+    #         label="Coulomb",
     #     )
-    #     axs.tick_params(labelsize=fontsize)
-    #     axs.set_ylabel("Energy", fontsize=fontsize)
-    #     axs.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
-    #     axs.legend(fontsize=12)
+    #     axs[2].plot(
+    #         strains,
+    #         born,
+    #         color="blue",
+    #         linewidth=1,
+    #         label="Born",
+    #     )
+
+    #     for ax in axs:
+    #         ax.tick_params(labelsize=fontsize)
+    #         ax.set_ylabel("Energy", fontsize=fontsize)
+    #         ax.set_xlabel("Strain ($\\AA$)", fontsize=fontsize)
+    #         ax.legend(fontsize=12)
 
     #     fig.tight_layout()
     #     fig.savefig(output, bbox_inches="tight")
     #     plt.close(fig)
 
-    #     return opt_E
+    # def _run_scale(
+    #     self,
+    #     scales,
+    #     fontsize: int = 12,
+    #     output: str = "scale.png",
+    #     show_born_and_coulomb: bool = False,
+    #     dpi: int = 400,
+    # ):
+    #     # sub = self.interface.substrate.bulk_structure
+    #     sub = self.interface.film.bulk_structure
 
-    def _run_bulk(
-        self,
-        strains,
-        fontsize: int = 12,
-        output: str = "PES.png",
-        show_born_and_coulomb: bool = False,
-        dpi: int = 400,
-    ):
-        # sub = self.interface.substrate.bulk_structure
-        sub = self.interface.film.bulk_structure
-        is_film = True
+    #     strains = np.linspace(-0.1, 0.1, 21)
+    #     strained_atoms = []
+    #     # for strain in [-0.02, -0.01, 0.0, 0.01, 0.02]:
+    #     for strain in strains:
+    #         strain_struc = sub.copy()
+    #         strain_struc.apply_strain(strain)
+    #         strain_atoms = AseAtomsAdaptor().get_atoms(strain_struc)
+    #         strain_atoms.set_array(
+    #             "is_film", np.zeros(len(strain_atoms)).astype(bool)
+    #         )
+    #         strained_atoms.append(strain_atoms)
 
-        strained_atoms = []
-        for strain in strains:
-            strain_struc = sub.copy()
-            strain_struc.apply_strain(strain)
-            strain_struc.add_site_property(
-                "is_film", [is_film] * len(strain_struc)
-            )
-            self._add_charges(strain_struc)
-            self._add_born_ns(strain_struc)
-            strained_atoms.append(strain_struc)
+    #     total_energy = []
+    #     for scale in scales:
+    #         strain_energy = []
+    #         for atoms in strained_atoms:
+    #             inputs = self._generate_inputs(
+    #                 atoms=atoms, shifts=[np.zeros(3)], interface=False
+    #             )
+    #             ionic_potential = IonicShiftedForcePotential(
+    #                 cutoff=self._cutoff,
+    #             )
+    #             (_total_energy, _, _, _, _,) = ionic_potential.forward(
+    #                 inputs=inputs,
+    #                 r0_dict=scale * self.r0_array,
+    #                 ns_dict=self.ns_dict,
+    #                 z_shift=False,
+    #             )
+    #             strain_energy.append(_total_energy)
+    #         total_energy.append(strain_energy)
 
-        total_energy = []
-        coulomb = []
-        born = []
-        for i, atoms in enumerate(strained_atoms):
-            inputs = self._generate_base_inputs(
-                structure=atoms,
-            )
-            batch_inputs = create_batch(inputs, 1)
+    #     total_energy = np.array(total_energy)
+    #     # coulomb = np.array(coulomb)
+    #     # born = np.array(born)
 
-            (
-                _total_energy,
-                _coulomb,
-                _born,
-                _,
-                _,
-            ) = self._calculate(batch_inputs, shifts=np.zeros((1, 3)))
-            total_energy.append(_total_energy)
-            coulomb.append(_coulomb)
-            born.append(_born)
+    #     fig, axs = plt.subplots(figsize=(6, 3), dpi=dpi, ncols=2)
 
-        total_energy = np.array(total_energy)
-        coulomb = np.array(coulomb)
-        born = np.array(born)
+    #     colors = plt.cm.jet
+    #     color_list = [colors(i) for i in np.linspace(0, 1, len(total_energy))]
 
-        fig, axs = plt.subplots(figsize=(4 * 3, 3), dpi=dpi, ncols=3)
-        print("Min Strain:", strains[np.argmin(total_energy)])
+    #     min_strains = []
+    #     min_Es = []
+    #     for i, E in enumerate(total_energy):
+    #         E -= E.min()
+    #         E /= E.max()
+    #         axs[0].plot(
+    #             strains,
+    #             E,
+    #             color=color_list[i],
+    #             linewidth=1,
+    #             # marker=".",
+    #             # alpha=0.3,
+    #         )
+    #         min_strain = strains[np.argmin(E)]
+    #         min_E = E.min()
+    #         min_strains.append(min_strain)
+    #         min_Es.append(min_E)
+    #         axs[0].scatter(
+    #             [min_strain],
+    #             [min_E],
+    #             c=[color_list[i]],
+    #             s=2,
+    #         )
 
-        axs[0].plot(
-            strains,
-            total_energy,
-            color="black",
-            linewidth=1,
-            label="Born+Coulomb",
-        )
-        axs[1].plot(
-            strains,
-            coulomb,
-            color="red",
-            linewidth=1,
-            label="Coulomb",
-        )
-        axs[2].plot(
-            strains,
-            born,
-            color="blue",
-            linewidth=1,
-            label="Born",
-        )
+    #     axs[1].plot(
+    #         scales, np.array(min_strains) ** 2, color="black", marker="."
+    #     )
 
-        for ax in axs:
-            ax.tick_params(labelsize=fontsize)
-            ax.set_ylabel("Energy", fontsize=fontsize)
-            ax.set_xlabel("Strain ($\\AA$)", fontsize=fontsize)
-            ax.legend(fontsize=12)
-
-        fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
-        plt.close(fig)
-
-    def _run_scale(
-        self,
-        scales,
-        fontsize: int = 12,
-        output: str = "scale.png",
-        show_born_and_coulomb: bool = False,
-        dpi: int = 400,
-    ):
-        # sub = self.interface.substrate.bulk_structure
-        sub = self.interface.film.bulk_structure
-
-        strains = np.linspace(-0.1, 0.1, 21)
-        strained_atoms = []
-        # for strain in [-0.02, -0.01, 0.0, 0.01, 0.02]:
-        for strain in strains:
-            strain_struc = sub.copy()
-            strain_struc.apply_strain(strain)
-            strain_atoms = AseAtomsAdaptor().get_atoms(strain_struc)
-            strain_atoms.set_array(
-                "is_film", np.zeros(len(strain_atoms)).astype(bool)
-            )
-            strained_atoms.append(strain_atoms)
-
-        total_energy = []
-        for scale in scales:
-            strain_energy = []
-            for atoms in strained_atoms:
-                inputs = self._generate_inputs(
-                    atoms=atoms, shifts=[np.zeros(3)], interface=False
-                )
-                ionic_potential = IonicShiftedForcePotential(
-                    cutoff=self._cutoff,
-                )
-                (_total_energy, _, _, _, _,) = ionic_potential.forward(
-                    inputs=inputs,
-                    r0_dict=scale * self.r0_array,
-                    ns_dict=self.ns_dict,
-                    z_shift=False,
-                )
-                strain_energy.append(_total_energy)
-            total_energy.append(strain_energy)
-
-        total_energy = np.array(total_energy)
-        # coulomb = np.array(coulomb)
-        # born = np.array(born)
-
-        fig, axs = plt.subplots(figsize=(6, 3), dpi=dpi, ncols=2)
-
-        colors = plt.cm.jet
-        color_list = [colors(i) for i in np.linspace(0, 1, len(total_energy))]
-
-        min_strains = []
-        min_Es = []
-        for i, E in enumerate(total_energy):
-            E -= E.min()
-            E /= E.max()
-            axs[0].plot(
-                strains,
-                E,
-                color=color_list[i],
-                linewidth=1,
-                # marker=".",
-                # alpha=0.3,
-            )
-            min_strain = strains[np.argmin(E)]
-            min_E = E.min()
-            min_strains.append(min_strain)
-            min_Es.append(min_E)
-            axs[0].scatter(
-                [min_strain],
-                [min_E],
-                c=[color_list[i]],
-                s=2,
-            )
-
-        axs[1].plot(
-            scales, np.array(min_strains) ** 2, color="black", marker="."
-        )
-
-        fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
-        plt.close(fig)
+    #     fig.tight_layout()
+    #     fig.savefig(output, bbox_inches="tight")
+    #     plt.close(fig)
