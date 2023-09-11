@@ -724,6 +724,8 @@ class SurfaceGenerator(Sequence):
     def _get_neighborhood(self, cutoff: float = 5.0) -> None:
         obs = self.oriented_bulk_structure.copy()
         obs.add_oxidation_state_by_guess()
+        charges = [s._oxi_state for s in obs.species]
+        self.oriented_bulk_structure.add_site_property("charge", charges)
 
         cnn = CrystalNN(search_cutoff=cutoff, cation_anion=True)
 
@@ -851,6 +853,24 @@ class SurfaceGenerator(Sequence):
         )
         self._get_surface_atoms(slab_base, neighbor_info)
 
+        is_top = np.array(slab_base.site_properties["is_top"])
+        is_bottom = np.array(slab_base.site_properties["is_bottom"])
+        bulk_equiv = np.array(slab_base.site_properties["bulk_equivalent"])
+
+        bottom_bulk_equiv = bulk_equiv[is_bottom]
+        top_bulk_equiv = bulk_equiv[is_top]
+
+        surf_key = tuple(
+            np.concatenate(
+                [
+                    np.sort(bottom_bulk_equiv),
+                    np.sort(top_bulk_equiv),
+                    np.zeros(bottom_bulk_equiv.shape),
+                    np.ones(top_bulk_equiv.shape),
+                ]
+            ).astype(int)
+        )
+
         z_coords = slab_base.frac_coords[:, -1]
         bot_z = z_coords.min()
         top_z = z_coords.max()
@@ -967,6 +987,7 @@ class SurfaceGenerator(Sequence):
             bottom_layer_dist,
             top_layer_dist,
             vacuum,
+            surf_key,
         )
 
     def _generate_slabs(self) -> List[Surface]:
@@ -984,6 +1005,7 @@ class SurfaceGenerator(Sequence):
         non_orthogonal_slabs = []
         bottom_layer_dists = []
         top_layer_dists = []
+        surface_keys = []
         neighbor_info = self._get_neighborhood()
 
         if not self.generate_all:
@@ -994,6 +1016,7 @@ class SurfaceGenerator(Sequence):
                 bottom_layer_dist,
                 top_layer_dist,
                 actual_vacuum,
+                surf_key,
             ) = self._get_slab(
                 shift=possible_shifts[0],
                 neighbor_info=neighbor_info,
@@ -1005,6 +1028,7 @@ class SurfaceGenerator(Sequence):
             non_orthogonal_slabs.append(non_orthogonal_slab)
             bottom_layer_dists.append(bottom_layer_dist)
             top_layer_dists.append(top_layer_dist)
+            surface_keys.append((surf_key, 0))
         else:
             for i, possible_shift in enumerate(possible_shifts):
                 (
@@ -1014,6 +1038,7 @@ class SurfaceGenerator(Sequence):
                     bottom_layer_dist,
                     top_layer_dist,
                     actual_vacuum,
+                    surf_key,
                 ) = self._get_slab(
                     shift=possible_shift,
                     neighbor_info=neighbor_info,
@@ -1025,6 +1050,7 @@ class SurfaceGenerator(Sequence):
                 non_orthogonal_slabs.append(non_orthogonal_slab)
                 bottom_layer_dists.append(bottom_layer_dist)
                 top_layer_dists.append(top_layer_dist)
+                surface_keys.append((surf_key, i))
 
         surfaces = []
 
@@ -1033,12 +1059,22 @@ class SurfaceGenerator(Sequence):
         else:
             base_structure = self.bulk_structure
 
+        sorted_surface_keys = sorted(surface_keys, key=lambda x: x[0])
+        groups = groupby(sorted_surface_keys, key=lambda x: x[0])
+
+        unique_inds = []
+        for group_key, group in groups:
+            _, inds = list(zip(*group))
+            unique_inds.append(min(inds))
+
+        unique_inds.sort()
+
         # Loop through slabs to ensure that they are all properly oriented and reduced
         # Return Surface objects
-        for i, slab in enumerate(orthogonal_slabs):
+        for i in unique_inds:
             # Create the Surface object
             surface = Surface(
-                orthogonal_slab=slab,
+                orthogonal_slab=orthogonal_slabs[i],
                 non_orthogonal_slab=non_orthogonal_slabs[i],
                 oriented_bulk=shifted_slab_bases[i],
                 bulk=base_structure,
@@ -1057,9 +1093,6 @@ class SurfaceGenerator(Sequence):
             surfaces.append(surface)
 
         return surfaces
-
-    def __len__(self):
-        return len(self._slabs)
 
     @property
     def nslabs(self):

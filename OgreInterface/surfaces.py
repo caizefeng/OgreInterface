@@ -207,6 +207,27 @@ class Surface:
         return np.where(layer_index == layer)[0]
 
     @property
+    def top_surface_charge(self) -> float:
+        frac_coords = self.oriented_bulk_structure.frac_coords
+        charges = np.array(
+            self.oriented_bulk_structure.site_properties["charge"]
+        )
+
+        z_frac = 1 - np.mod(np.round(frac_coords[:, -1], 5), 1)
+
+        return (charges * z_frac).sum()
+
+    @property
+    def bottom_surface_charge(self) -> float:
+        frac_coords = self.oriented_bulk_structure.frac_coords
+        charges = np.array(
+            self.oriented_bulk_structure.site_properties["charge"]
+        )
+        z_frac = np.mod(np.round(frac_coords[:, -1], 5), 1)
+
+        return (charges * z_frac).sum()
+
+    @property
     def atomic_layers(self) -> int:
         """
         This function will return the number of atomic layers in the slab
@@ -1306,7 +1327,7 @@ class Interface:
         site_props = interface.site_properties
         is_sub = np.array(site_props["is_sub"])
         layer_index = np.array(site_props[layer_key])
-        sub_n_layers = layer_index.max()
+        sub_n_layers = layer_index[is_sub].max()
         rel_layer_index = sub_n_layers - layer_index
         is_layer = rel_layer_index == layer_from_interface
 
@@ -1798,6 +1819,8 @@ class Interface:
         relax: bool = False,
         film_layers_to_relax: int = 1,
         substrate_layers_to_relax: int = 1,
+        atomic_layers: bool = False,
+        relax_z_only: bool = False,
     ) -> None:
         """
         Write the POSCAR of the interface
@@ -1808,6 +1831,8 @@ class Interface:
             relax: Determines if selective dynamics is applied to the atoms at the interface
             film_layers_to_relax: Number of unit cell layers near the interface to relax
             substrate_layers_to_relax: Number of unit cell layers near the interface to relax
+            atomic_layers: Determines if the number of layer is atomic layers or unit cell layers
+            relax_z_only: Determines if the relaxation is in the z-direction only
         """
         if orthogonal:
             slab = self._orthogonal_structure
@@ -1830,11 +1855,21 @@ class Interface:
                 ]
             )
             film_layers = np.arange(film_layers_to_relax)
-            sub_layers = np.arange(
-                self.substrate.layers - substrate_layers_to_relax,
-                self.substrate.layers,
-            )
-            layer_index = np.array(slab.site_properties["layer_index"])
+
+            if atomic_layers:
+                layer_key = "atomic_layer_index"
+                sub_layers = np.arange(
+                    self.substrate.atomic_layers - substrate_layers_to_relax,
+                    self.substrate.atomic_layers,
+                )
+            else:
+                layer_key = "layer_index"
+                sub_layers = np.arange(
+                    self.substrate.layers - substrate_layers_to_relax,
+                    self.substrate.layers,
+                )
+
+            layer_index = np.array(slab.site_properties[layer_key])
             is_sub = np.array(slab.site_properties["is_sub"])
             is_film = np.array(slab.site_properties["is_film"])
             film_to_relax = np.logical_and(
@@ -1843,11 +1878,15 @@ class Interface:
             sub_to_relax = np.logical_and(
                 is_sub, np.isin(layer_index, sub_layers)
             )
+
             to_relax = np.repeat(
                 np.logical_or(sub_to_relax, film_to_relax).reshape(-1, 1),
                 repeats=3,
                 axis=1,
             )
+
+            if relax_z_only:
+                to_relax[:, :2] = False
 
         comment += "|" + "|".join(
             [
