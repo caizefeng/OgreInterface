@@ -26,7 +26,7 @@ from tqdm import tqdm
 import numpy as np
 import math
 from copy import deepcopy
-from typing import Union, List, TypeVar, Tuple, Dict
+from typing import Union, List, TypeVar, Tuple, Dict, Optional
 from itertools import combinations, product, groupby
 from ase import Atoms
 from ase.data import chemical_symbols
@@ -79,6 +79,7 @@ class SurfaceGenerator(Sequence):
         bulk: Bulk crystal structure used to create the surface
         miller_index: Miller index of the surface
         layers: Number of layers to include in the surface
+        minimum_thickness: Optional flag to set the minimum thickness of the slab. If this is not None, then it will override the layers value
         vacuum: Size of the vacuum to include over the surface in Angstroms
         refine_structure: Determines if the structure is first refined to it's standard settings according to it's spacegroup.
             This is done using spglib.standardize_cell(cell, to_primitive=False, no_idealize=False). Mainly this is usefull if
@@ -117,8 +118,9 @@ class SurfaceGenerator(Sequence):
         self,
         bulk: Union[Structure, Atoms],
         miller_index: List[int],
-        layers: int,
-        vacuum: float,
+        layers: Optional[int] = None,
+        minimum_thickness: Optional[float] = 18.0,
+        vacuum: float = 40.0,
         refine_structure: bool = True,
         generate_all: bool = True,
         lazy: bool = False,
@@ -138,12 +140,10 @@ class SurfaceGenerator(Sequence):
         self._use_prim = len(self.bulk_structure) != len(
             self.primitive_structure
         )
-        # self._use_prim = False
 
         self._point_group_operations = self._get_point_group_operations()
 
         self.miller_index = miller_index
-        self.layers = layers
         self.vacuum = vacuum
         self.generate_all = generate_all
         self.lazy = lazy
@@ -156,6 +156,13 @@ class SurfaceGenerator(Sequence):
             self.surface_normal,
             self.c_projection,
         ) = self._get_oriented_bulk_structure()
+
+        if layers is None and minimum_thickness is None:
+            raise "Either layer or minimum_thickness must be set"
+        if layers is not None:
+            self.layers = layers
+        if layers is None and minimum_thickness is not None:
+            self.layers = int((minimum_thickness // self.c_projection) + 1)
 
         if not self.lazy:
             self._slabs = self._generate_slabs()
@@ -187,8 +194,9 @@ class SurfaceGenerator(Sequence):
         cls,
         filename: str,
         miller_index: List[int],
-        layers: int,
-        vacuum: float,
+        layers: Optional[int] = None,
+        minimum_thickness: Optional[float] = 18.0,
+        vacuum: float = 40.0,
         refine_structure: bool = True,
         generate_all: bool = True,
         lazy: bool = False,
@@ -219,6 +227,7 @@ class SurfaceGenerator(Sequence):
             structure,
             miller_index,
             layers,
+            minimum_thickness,
             vacuum,
             refine_structure,
             generate_all,

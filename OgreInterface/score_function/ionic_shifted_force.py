@@ -87,6 +87,12 @@ class IonicShiftedForcePotential(nn.Module):
         is_film_j = is_film[idx_j]
 
         r_ij = R_shift[idx_j] - R_shift[idx_i] + offsets
+        # print("Total Number of rs", len(r_ij))
+        # print(
+        #     "Number of Constant rs",
+        #     (r_ij[is_film_i][:, -1] > 0.0).sum()
+        #     + (r_ij[~is_film_i][:, -1] < 0.0).sum(),
+        # )
 
         # print("is_film_i =", is_film_i.dtype)
         # print("is_film_j =", is_film_j.dtype)
