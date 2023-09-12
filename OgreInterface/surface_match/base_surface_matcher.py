@@ -1,7 +1,6 @@
 from OgreInterface.surfaces import Interface
 from OgreInterface.score_function.generate_inputs import (
     generate_input_dict,
-    # generate_input_dict_matscipy,
     create_batch,
 )
 from OgreInterface import utils

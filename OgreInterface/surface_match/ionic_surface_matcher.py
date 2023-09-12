@@ -319,7 +319,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             r0_array[1, j, i] = iface_i + iface_j
             r0_array[2, j, i] = sub_r0_i + sub_r0_j
 
-        return r0_array
+        return r0_array.astype(np.float32)
 
     def bo_function(self, a, b, z):
         frac_ab = np.array([a, b]).reshape(1, 2)

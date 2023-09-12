@@ -17,6 +17,11 @@ def create_batch(
     batch_inputs["idx_m"] = idx_m
 
     for k, v in inputs.items():
+        if "float" in str(v.dtype):
+            new_dtype = np.float32
+        else:
+            new_dtype = v.dtype
+
         repeat_val = [1] * len(v.shape)
         repeat_val[0] = batch_size
         repeat_val = tuple(repeat_val)
@@ -26,10 +31,10 @@ def create_batch(
             batch_offsets = np.repeat(idx_offsets, idx_len)
             batch_idx = np.tile(v, repeat_val)
             batch_idx += batch_offsets
-            batch_inputs[k] = batch_idx.astype(v.dtype)
+            batch_inputs[k] = batch_idx.astype(new_dtype)
         else:
             batch_val = np.tile(v, repeat_val)
-            batch_inputs[k] = batch_val.astype(v.dtype)
+            batch_inputs[k] = batch_val.astype(new_dtype)
 
     return batch_inputs
 
