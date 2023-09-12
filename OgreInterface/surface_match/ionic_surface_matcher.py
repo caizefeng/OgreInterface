@@ -14,7 +14,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RectBivariateSpline, CubicSpline
 from itertools import groupby, combinations_with_replacement, product
-import torch
+
+# import torch
 import time
 
 
@@ -318,7 +319,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             r0_array[1, j, i] = iface_i + iface_j
             r0_array[2, j, i] = sub_r0_i + sub_r0_j
 
-        return torch.from_numpy(r0_array).to(dtype=torch.float32)
+        return r0_array
 
     def bo_function(self, a, b, z):
         frac_ab = np.array([a, b]).reshape(1, 2)
@@ -419,7 +420,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         )
         outputs = ionic_potential.forward(
             inputs=inputs,
-            shift=torch.from_numpy(shifts).to(dtype=torch.float32),
+            shift=shifts,
             r0_array=self.r0_array,
         )
 
