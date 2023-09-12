@@ -83,6 +83,14 @@ class IonicShiftedForcePotential(nn.Module):
         idx_j = idx_j_all[pair_index]
         offsets = inputs["offsets"][pair_index]
 
+        # print(
+        #     "Film Sub Interactions = ",
+        #     2
+        #     * torch.logical_and(is_film_bool[idx_i], is_sub_bool[idx_j]).sum(),
+        # )
+
+        # print("Total Interactions = ", len(idx_i))
+
         is_film_i = is_film[idx_i]
         is_film_j = is_film[idx_j]
 

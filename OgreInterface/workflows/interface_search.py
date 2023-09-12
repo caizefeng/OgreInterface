@@ -29,6 +29,7 @@ class InterfaceSearch:
         film: Bulk structure of the film in either Pymatgen Structure, ASE Atoms, or a structure file such as a POSCAR or Cif
         max_substrate_index: Max miller index of the substrate surfaces
         max_film_index: Max miller index of the film surfaces
+        minimum_slab_thickness: Determines the minimum thickness of the film and substrate slabs
         max_area_mismatch: Area ratio mismatch tolerance for the InterfaceGenerator
         max_angle_strain: Angle strain tolerance for the InterfaceGenerator
         max_linear_strain: Lattice vectors length mismatch tolerance for the InterfaceGenerator
@@ -45,6 +46,7 @@ class InterfaceSearch:
         film_bulk: Union[Structure, Atoms, str],
         substrate_miller_index: List[int],
         film_miller_index: List[int],
+        minimum_slab_thickness: float = 18.0,
         max_area_mismatch: float = 0.01,
         max_angle_strain: float = 0.01,
         max_linear_strain: float = 0.01,
@@ -65,6 +67,7 @@ class InterfaceSearch:
         else:
             self._film_bulk, _ = self._get_bulk(film_bulk)
 
+        self._minimum_slab_thickness = minimum_slab_thickness
         self._substrate_miller_index = substrate_miller_index
         self._film_miller_index = film_miller_index
         self._max_area_mismatch = max_area_mismatch
@@ -154,7 +157,7 @@ class InterfaceSearch:
             bulk=self._substrate_bulk,
             miller_index=self._substrate_miller_index,
             layers=None,
-            minimum_thickness=18.0,
+            minimum_thickness=self._minimum_slab_thickness,
             vacuum=10,
             refine_structure=self._refine_structure,
         )
@@ -163,7 +166,7 @@ class InterfaceSearch:
             bulk=self._film_bulk,
             miller_index=self._film_miller_index,
             layers=None,
-            minimum_thickness=18.0,
+            minimum_thickness=self._minimum_slab_thickness,
             vacuum=10,
             refine_structure=True,
         )
