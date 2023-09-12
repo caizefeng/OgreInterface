@@ -60,7 +60,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self._born_n = born_n
         self._cutoff = 18.0
         self.charge_dict = self._get_charges()
-        self.r0_array = self._get_r0s(
+        self.r0_dict = self._get_r0s(
             sub=self.interface.substrate.bulk_structure,
             film=self.interface.film.bulk_structure,
             charge_dict=self.charge_dict,
@@ -68,9 +68,15 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self._add_born_ns(self.iface)
         self._add_born_ns(self.sub_part)
         self._add_born_ns(self.film_part)
-        self._add_charges(self.iface)
-        self._add_charges(self.sub_part)
-        self._add_charges(self.film_part)
+        self._add_r0s(self.iface)
+        self._add_r0s(self.sub_part)
+        self._add_r0s(self.film_part)
+        print(self.iface)
+        print(self.sub_part)
+        print(self.film_part)
+        # self._add_charges(self.iface)
+        # self._add_charges(self.sub_part)
+        # self._add_charges(self.film_part)
         self.d_interface = self.interface.interfacial_distance
         self.opt_xy_shift = np.zeros(2)
         self.opt_d_interface = self.d_interface
@@ -106,7 +112,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             self.iface.remove_sites(H_inds)
 
         self._add_born_ns(self.iface)
-        self._add_charges(self.iface)
+        self._add_r0s(self.iface)
         self.iface_inputs = self._generate_base_inputs(
             structure=self.iface,
             is_slab=True,
@@ -115,11 +121,23 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self.opt_xy_shift[:2] = 0.0
         self.d_interface = self.opt_d_interface
 
-    def _add_charges(self, struc):
-        charges = [
-            self.charge_dict[chemical_symbols[z]] for z in struc.atomic_numbers
-        ]
-        struc.add_site_property("charges", charges)
+    # def _add_charges(self, struc):
+    #     charges = [
+    #         self.charge_dict[chemical_symbols[z]] for z in struc.atomic_numbers
+    #     ]
+    #     struc.add_site_property("charges", charges)
+
+    def _add_r0s(self, struc):
+        r0s = []
+
+        for site in struc:
+            atomic_number = site.specie.Z
+            if bool(site.properties["is_film"]):
+                r0s.append(self.r0_dict["film"][atomic_number])
+            else:
+                r0s.append(self.r0_dict["sub"][atomic_number])
+
+        struc.add_site_property("r0s", r0s)
 
     def _add_born_ns(self, struc):
         ion_config_to_n_map = {
@@ -212,35 +230,12 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
                 r0_2 = (1 - radius_frac) * d
                 ionic_radii_dict[n[0]].append(r0_1)
                 ionic_radii_dict[n[1]].append(r0_2)
-                # print(
-                #     f"bond = {n[0]}-{n[1]}",
-                #     "",
-                #     f"d({n[0]}) = {d1:.3f}",
-                #     "",
-                #     f"d({n[1]}) = {d2:.3f}",
-                #     "",
-                #     f"center = {n[0]}",
-                #     "",
-                #     f"r_pred = {r0_1:.3f}",
-                # )
-                # print(
-                #     f"bond = {n[0]}-{n[1]}",
-                #     "",
-                #     f"d({n[0]}) = {d1:.3f}",
-                #     "",
-                #     f"d({n[1]}) = {d2:.3f}",
-                #     "",
-                #     f"center = {n[1]}",
-                #     "",
-                #     f"r_pred = {r0_2:.3f}",
-                # )
 
         mean_radius_dict = {k: np.mean(v) for k, v in ionic_radii_dict.items()}
 
         return neighbor_dict, mean_radius_dict
 
     def _get_r0s(self, sub, film, charge_dict):
-        r0_array = np.zeros((3, 118, 118))
         sub_dict, sub_radii_dict = self._get_neighborhood_info(
             sub, charge_dict
         )
@@ -248,78 +243,82 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             film, charge_dict
         )
 
-        interface_atomic_numbers = np.unique(
-            np.concatenate([sub.atomic_numbers, film.atomic_numbers])
-        )
+        r0_dict = {"film": film_radii_dict, "sub": sub_radii_dict}
 
-        ionic_radius_dict = {}
+        return r0_dict
 
-        for n in interface_atomic_numbers:
-            element = Element(chemical_symbols[n])
+        # interface_atomic_numbers = np.unique(
+        #     np.concatenate([sub.atomic_numbers, film.atomic_numbers])
+        # )
 
-            try:
-                d = float(
-                    element.ionic_radii[charge_dict[chemical_symbols[n]]]
-                )
+        # ionic_radius_dict = {}
 
-            except KeyError:
-                print(
-                    f"No ionic radius available for {chemical_symbols[n]}, using the atomic radius instead"
-                )
-                d = float(element.atomic_radius)
+        # for n in interface_atomic_numbers:
+        #     element = Element(chemical_symbols[n])
 
-            ionic_radius_dict[n] = d
+        #     try:
+        #         d = float(
+        #             element.ionic_radii[charge_dict[chemical_symbols[n]]]
+        #         )
 
-        interface_combos = product(interface_atomic_numbers, repeat=2)
-        for key in interface_combos:
-            i = key[0]
-            j = key[1]
+        #     except KeyError:
+        #         print(
+        #             f"No ionic radius available for {chemical_symbols[n]}, using the atomic radius instead"
+        #         )
+        #         d = float(element.atomic_radius)
 
-            has_sub_i = True
-            has_sub_j = True
+        #     ionic_radius_dict[n] = d
 
-            has_film_i = True
-            has_film_j = True
+        # interface_combos = product(interface_atomic_numbers, repeat=2)
+        # for key in interface_combos:
+        #     i = key[0]
+        #     j = key[1]
 
-            if i in sub_radii_dict:
-                sub_r0_i = sub_radii_dict[i]
-            else:
-                sub_r0_i = ionic_radius_dict[i]
-                has_sub_i = False
+        #     has_sub_i = True
+        #     has_sub_j = True
 
-            if j in sub_radii_dict:
-                sub_r0_j = sub_radii_dict[j]
-            else:
-                sub_r0_j = ionic_radius_dict[j]
-                has_sub_j = False
+        #     has_film_i = True
+        #     has_film_j = True
 
-            if i in film_radii_dict:
-                film_r0_i = film_radii_dict[i]
-            else:
-                film_r0_i = ionic_radius_dict[i]
-                has_film_i = False
+        #     if i in sub_radii_dict:
+        #         sub_r0_i = sub_radii_dict[i]
+        #     else:
+        #         sub_r0_i = ionic_radius_dict[i]
+        #         has_sub_i = False
 
-            if j in film_radii_dict:
-                film_r0_j = film_radii_dict[j]
-            else:
-                film_r0_j = ionic_radius_dict[j]
-                has_film_j = False
+        #     if j in sub_radii_dict:
+        #         sub_r0_j = sub_radii_dict[j]
+        #     else:
+        #         sub_r0_j = ionic_radius_dict[j]
+        #         has_sub_j = False
 
-            iface_i = ((sub_r0_i * has_sub_i) + (film_r0_i * has_film_i)) / (
-                has_sub_i + has_film_i
-            )
-            iface_j = ((sub_r0_j * has_sub_j) + (film_r0_j * has_film_j)) / (
-                has_sub_j + has_film_j
-            )
+        #     if i in film_radii_dict:
+        #         film_r0_i = film_radii_dict[i]
+        #     else:
+        #         film_r0_i = ionic_radius_dict[i]
+        #         has_film_i = False
 
-            r0_array[0, i, j] = film_r0_i + film_r0_j
-            r0_array[1, i, j] = iface_i + iface_j
-            r0_array[2, i, j] = sub_r0_i + sub_r0_j
-            r0_array[0, j, i] = film_r0_i + film_r0_j
-            r0_array[1, j, i] = iface_i + iface_j
-            r0_array[2, j, i] = sub_r0_i + sub_r0_j
+        #     if j in film_radii_dict:
+        #         film_r0_j = film_radii_dict[j]
+        #     else:
+        #         film_r0_j = ionic_radius_dict[j]
+        #         has_film_j = False
 
-        return r0_array.astype(np.float32)
+        #     iface_i = ((sub_r0_i * has_sub_i) + (film_r0_i * has_film_i)) / (
+        #         has_sub_i + has_film_i
+        #     )
+        #     iface_j = ((sub_r0_j * has_sub_j) + (film_r0_j * has_film_j)) / (
+        #         has_sub_j + has_film_j
+        #     )
+
+        #     r0_array[0, i, j] = film_r0_i + film_r0_j
+        #     r0_array[1, i, j] = iface_i + iface_j
+        #     r0_array[2, i, j] = sub_r0_i + sub_r0_j
+        #     r0_array[0, j, i] = film_r0_i + film_r0_j
+        #     r0_array[1, j, i] = iface_i + iface_j
+        #     r0_array[2, j, i] = sub_r0_i + sub_r0_j
+
+        # return r0_array.astype(np.float32)
 
     def bo_function(self, a, b, z):
         frac_ab = np.array([a, b]).reshape(1, 2)
@@ -421,7 +420,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         outputs = ionic_potential.forward(
             inputs=inputs,
             shift=shifts,
-            r0_array=self.r0_array,
+            # r0_array=self.r0_array,
         )
 
         return outputs

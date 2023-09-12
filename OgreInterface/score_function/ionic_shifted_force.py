@@ -31,7 +31,7 @@ class IonicShiftedForcePotential:
         self,
         inputs: Dict[str, np.ndarray],
         shift: np.ndarray,
-        r0_array: np.ndarray,
+        # r0_array: np.ndarray,
     ) -> Dict[str, np.ndarray]:
         q = inputs["partial_charges"]
         idx_m = inputs["idx_m"]
@@ -40,6 +40,7 @@ class IonicShiftedForcePotential:
         n_molecules = int(idx_m[-1]) + 1
         z = inputs["Z"]
         ns = inputs["born_ns"]
+        r0s = inputs["r0s"]
         idx_m = inputs["idx_m"]
 
         idx_i_all = inputs["idx_i"]
@@ -54,7 +55,7 @@ class IonicShiftedForcePotential:
             repeats=inputs["n_atoms"],
             axis=0,
         )
-        shifts[is_sub.astype(bool)] *= 0.0
+        shifts[is_sub] *= 0.0
 
         # s = time.time()
         R_shift = R + shifts
@@ -67,21 +68,13 @@ class IonicShiftedForcePotential:
         in_cutoff = distances <= self.cutoff
         idx_i = idx_i_all[in_cutoff]
         idx_j = idx_j_all[in_cutoff]
-        # offsets = inputs["offsets"][in_cutoff]
-
-        is_film_i = is_film[idx_i]
-        is_film_j = is_film[idx_j]
-        # print(f"Cutoff filtering = {time.time() - s:.5f}")
-
-        # s = time.time()
-        # r_ij = R_shift[idx_j] - R_shift[idx_i] + offsets
-        # d_ij = np.sqrt(np.einsum("ij,ij->i", r_ij, r_ij))
         d_ij = distances[in_cutoff]
         # print(f"Getting new distances = {time.time() - s:.5f}")
 
-        r0_ij = r0_array[
-            is_film_i.astype(int) + is_film_j.astype(int), z[idx_i], z[idx_j]
-        ]
+        r0_ij = r0s[idx_i] + r0s[idx_j]
+        # r0_ij = r0_array[
+        #     is_film_i.astype(int) + is_film_j.astype(int), z[idx_i], z[idx_j]
+        # ]
         n_ij = (ns[idx_i] + ns[idx_j]) / 2
         q_ij = q[idx_i] * q[idx_j]
 

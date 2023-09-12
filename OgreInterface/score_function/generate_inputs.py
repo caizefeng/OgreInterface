@@ -73,8 +73,8 @@ def create_batch(
 #         "e_negs": e_negs,
 #     }
 
-#     if "charges" in site_props:
-#         charges = torch.tensor(site_props["charges"])
+#     if "charge" in site_props:
+#         charges = torch.tensor(site_props["charge"])
 #         input_dict["partial_charges"] = charges
 
 #     if "born_ns" in site_props:
@@ -135,13 +135,17 @@ def generate_input_dict(
         "offsets": offsets,
     }
 
-    if "charges" in site_props:
-        charges = np.array(site_props["charges"])
+    if "charge" in site_props:
+        charges = np.array(site_props["charge"])
         input_dict["partial_charges"] = charges
 
     if "born_ns" in site_props:
         ns = np.array(site_props["born_ns"])
         input_dict["born_ns"] = ns
+
+    if "r0s" in site_props:
+        r0s = np.array(site_props["r0s"])
+        input_dict["r0s"] = r0s
 
     return input_dict
 
