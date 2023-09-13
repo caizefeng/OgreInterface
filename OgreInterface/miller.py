@@ -72,8 +72,10 @@ class MillerSearch(object):
         max_linear_strain: float = 0.01,
         max_area: float = 500.0,
         refine_structure: bool = True,
+        suppress_warnings: bool = False,
     ) -> None:
         self.refine_structure = refine_structure
+        self._suppress_warnings = suppress_warnings
         if type(substrate) == str:
             self.substrate, _ = self._get_bulk(Structure.from_file(substrate))
         else:

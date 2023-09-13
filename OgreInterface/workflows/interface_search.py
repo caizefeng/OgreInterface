@@ -52,9 +52,10 @@ class InterfaceSearch:
         max_linear_strain: float = 0.01,
         max_area: float = 500.0,
         refine_structure: bool = True,
-        supress_warnings: bool = False,
+        suppress_warnings: bool = False,
     ):
         self._refine_structure = refine_structure
+        self._suppress_warnings = suppress_warnings
         if type(substrate_bulk) == str:
             self._substrate_bulk, _ = self._get_bulk(
                 Structure.from_file(substrate_bulk)
@@ -222,6 +223,7 @@ class InterfaceSearch:
         energies = []
         opt_abz_shifts = []
         surface_charges = []
+        surface_energies = []
 
         for i, film_sub_ind in enumerate(film_and_substrate_inds):
             film_ind = film_sub_ind[0]
@@ -265,7 +267,6 @@ class InterfaceSearch:
                 auto_determine_born_n=False,
                 born_n=12.0,
                 grid_density=2.5,
-                use_interface_energy=True,
             )
 
             _ = intE_matcher.optimizePSO(
@@ -300,16 +301,10 @@ class InterfaceSearch:
 
             opt_abz_shifts.append([a_shift, b_shift, opt_d])
 
-            int_energy = intE_matcher.get_current_energy()
-
-            adhE_matcher = IonicSurfaceMatcher(
-                interface=interface,
-                auto_determine_born_n=False,
-                born_n=12.0,
-                grid_density=2.5,
-                use_interface_energy=False,
-            )
-            adh_energy = adhE_matcher.get_current_energy()
+            adh_energy, int_energy = intE_matcher.get_current_energy()
+            film_surface_energy = intE_matcher.film_surface_energy
+            sub_surface_energy = intE_matcher.sub_surface_energy
+            surface_energies.append([film_surface_energy, sub_surface_energy])
 
             energies.append([int_energy, adh_energy])
 
@@ -317,6 +312,7 @@ class InterfaceSearch:
         opt_abz_shifts = np.array(opt_abz_shifts)
         film_sub_inds = np.array(film_and_substrate_inds)
         surface_charges = np.round(np.array(surface_charges), 4)
+        surface_energies = np.array(surface_energies)
 
         data = {
             "Film Index": film_sub_inds[:, 0].astype(int),
@@ -326,6 +322,8 @@ class InterfaceSearch:
             "Interfacial Distance": opt_abz_shifts[:, 2],
             "Film Surface Charge": surface_charges[:, 0],
             "Substrate Surface Charge": surface_charges[:, 1],
+            "Score Film Surface Energy": surface_energies[:, 0],
+            "Score Substrate Surface Energy": surface_energies[:, 1],
             "Score Interface Energy": energies[:, 0],
             "Score Adhesion Energy": energies[:, 1],
         }

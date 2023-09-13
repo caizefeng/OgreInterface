@@ -47,14 +47,14 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self,
         interface: Interface,
         grid_density: float = 2.5,
-        use_interface_energy: bool = True,
+        # use_interface_energy: bool = True,
         auto_determine_born_n: bool = True,
         born_n: float = 12.0,
     ):
         super().__init__(
             interface=interface,
             grid_density=grid_density,
-            use_interface_energy=use_interface_energy,
+            # use_interface_energy=use_interface_energy,
         )
         self._auto_determine_born_n = auto_determine_born_n
         self._born_n = born_n
@@ -66,11 +66,19 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             charge_dict=self.charge_dict,
         )
         self._add_born_ns(self.iface)
-        self._add_born_ns(self.sub_part)
-        self._add_born_ns(self.film_part)
+        self._add_born_ns(self.sub_sc_part)
+        self._add_born_ns(self.film_sc_part)
+        # self._add_born_ns(self.sub_surface)
+        # self._add_born_ns(self.film_surface)
+        self._add_born_ns(self.sub_bulk)
+        self._add_born_ns(self.film_bulk)
         self._add_r0s(self.iface)
-        self._add_r0s(self.sub_part)
-        self._add_r0s(self.film_part)
+        self._add_r0s(self.sub_sc_part)
+        self._add_r0s(self.film_sc_part)
+        # self._add_r0s(self.sub_surface)
+        # self._add_r0s(self.film_surface)
+        self._add_r0s(self.sub_bulk)
+        self._add_r0s(self.film_bulk)
         # print(self.sub_part)
         # print(self.film_part)
         # self._add_charges(self.iface)
@@ -84,15 +92,68 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             structure=self.iface,
             is_slab=True,
         )
-        self.sub_inputs = self._generate_base_inputs(
-            structure=self.sub_part,
-            is_slab=(not self.use_interface_energy),
+        self.sub_sc_inputs = self._generate_base_inputs(
+            structure=self.sub_sc_part,
+            is_slab=True,
         )
-        self.film_inputs = self._generate_base_inputs(
-            structure=self.film_part,
-            is_slab=(not self.use_interface_energy),
+        self.film_sc_inputs = self._generate_base_inputs(
+            structure=self.film_sc_part,
+            is_slab=True,
         )
-        self.film_energy, self.sub_energy = self._get_film_sub_energies()
+        self.sub_bulk_inputs = self._generate_base_inputs(
+            structure=self.sub_bulk,
+            is_slab=False,
+        )
+        self.film_bulk_inputs = self._generate_base_inputs(
+            structure=self.film_bulk,
+            is_slab=False,
+        )
+
+        # self.sub_surface_inputs = self._generate_base_inputs(
+        #     structure=self.sub_surface,
+        #     is_slab=False,
+        # )
+        # self._get_pseudo_surface_inputs(
+        #     inputs=self.sub_surface_inputs,
+        #     is_film=False,
+        # )
+
+        # self.film_surface_inputs = self._generate_base_inputs(
+        #     structure=self.film_surface,
+        #     is_slab=False,
+        # )
+        # self._get_pseudo_surface_inputs(
+        #     inputs=self.film_surface_inputs,
+        #     is_film=True,
+        # )
+
+        (
+            self.film_energy,
+            self.sub_energy,
+            self.film_bulk_energy,
+            self.sub_bulk_energy,
+            self.film_surface_energy,
+            self.sub_surface_energy,
+        ) = self._get_film_sub_energies()
+        # print("Sub Total Energy = ", self.sub_energy)
+        # print("Film Total Energy = ", self.film_energy)
+        # print("Film Surface Energy = ", self.film_surface_energy)
+        # print("Sub Surface Energy = ", self.sub_surface_energy)
+        # print("")
+
+    def _get_pseudo_surface_inputs(
+        self,
+        inputs: Dict[str, np.ndarray],
+        is_film: bool = True,
+    ) -> Dict[str, np.ndarray]:
+        if is_film:
+            mask = inputs["offsets"][:, -1] >= 0.0
+        else:
+            mask = inputs["offsets"][:, -1] <= 0.0
+
+        for k, v in inputs.items():
+            if "idx" in k or "offsets" in k:
+                inputs[k] = v[mask]
 
     def get_optimized_structure(self):
         opt_shift = self.opt_xy_shift
@@ -341,43 +402,100 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             batch_size=len(x),
         )
         E, _, _, _, _ = self._calculate(inputs=batch_inputs, shifts=shift)
-        # E_adh = (
-        #     -((self.film_energy + self.sub_energy) - E) / self.interface.area
-        # )
+        E_adh, E_iface = self._get_interface_energy(total_energies=E)
 
-        E_int = (E - self.film_energy - self.sub_energy) / (
-            2 * self.interface.area
-        )
-
-        return E_int
+        return E_iface
 
     def _get_film_sub_energies(self):
-        sub_inputs = create_batch(inputs=self.sub_inputs, batch_size=1)
-        film_inputs = create_batch(inputs=self.film_inputs, batch_size=1)
-
-        sub_energy, _, _, _, _ = self._calculate(
-            sub_inputs,
-            shifts=np.zeros((1, 3)),
+        sub_sc_inputs = create_batch(
+            inputs=self.sub_sc_inputs,
+            batch_size=1,
         )
-        film_energy, _, _, _, _ = self._calculate(
-            film_inputs,
-            shifts=np.zeros((1, 3)),
+        film_sc_inputs = create_batch(
+            inputs=self.film_sc_inputs,
+            batch_size=1,
         )
 
-        if self.use_interface_energy:
-            N_sub_layers = self.interface.substrate.layers
-            N_film_layers = self.interface.film.layers
-            N_sub_sc = np.linalg.det(
-                self.interface.match.substrate_sl_transform
-            )
-            N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
-            film_scale = N_film_layers * N_film_sc
-            sub_scale = N_sub_layers * N_sub_sc
+        # sub_surface_inputs = create_batch(
+        #     inputs=self.sub_surface_inputs,
+        #     batch_size=1,
+        # )
+        # film_surface_inputs = create_batch(
+        #     inputs=self.film_surface_inputs,
+        #     batch_size=1,
+        # )
 
-            sub_energy *= sub_scale
-            film_energy *= film_scale
+        sub_bulk_inputs = create_batch(
+            inputs=self.sub_bulk_inputs,
+            batch_size=1,
+        )
+        film_bulk_inputs = create_batch(
+            inputs=self.film_bulk_inputs,
+            batch_size=1,
+        )
 
-        return film_energy, sub_energy
+        sub_sc_energy, _, _, _, _ = self._calculate(
+            sub_sc_inputs,
+            shifts=np.zeros((1, 3)),
+        )
+        film_sc_energy, _, _, _, _ = self._calculate(
+            film_sc_inputs,
+            shifts=np.zeros((1, 3)),
+        )
+
+        sub_bulk_energy, _, _, _, _ = self._calculate(
+            sub_bulk_inputs,
+            shifts=np.zeros((1, 3)),
+        )
+        film_bulk_energy, _, _, _, _ = self._calculate(
+            film_bulk_inputs,
+            shifts=np.zeros((1, 3)),
+        )
+
+        # sub_surface_energy, _, _, _, _ = self._calculate(
+        #     sub_surface_inputs,
+        #     shifts=np.zeros((1, 3)),
+        # )
+        # film_surface_energy, _, _, _, _ = self._calculate(
+        #     film_surface_inputs,
+        #     shifts=np.zeros((1, 3)),
+        # )
+
+        N_sub_layers = self.interface.substrate.layers
+        N_film_layers = self.interface.film.layers
+        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
+        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
+        film_bulk_scale = N_film_layers * N_film_sc
+        sub_bulk_scale = N_sub_layers * N_sub_sc
+
+        # sub_bulk_energy *= sub_bulk_scale
+        # film_bulk_energy *= film_bulk_scale
+
+        avg_film_surface_energy = (
+            film_sc_energy - (film_bulk_scale * film_bulk_energy)
+        ) / (2 * self.interface.area)
+        avg_sub_surface_energy = (
+            sub_sc_energy - (sub_bulk_scale * sub_bulk_energy)
+        ) / (2 * self.interface.area)
+
+        # film_surface_E = (
+        #     film_surface_energy - (N_film_layers * film_bulk_energy)
+        # ) / (self.interface.film.area)
+        # sub_surface_E = (
+        #     sub_surface_energy - (N_sub_layers * sub_bulk_energy)
+        # ) / (self.interface.substrate.area)
+
+        # print(avg_film_surface_energy, avg_sub_surface_energy)
+        # print(film_surface_E, sub_surface_E)
+
+        return (
+            film_sc_energy[0],
+            sub_sc_energy[0],
+            film_bulk_energy[0],
+            sub_bulk_energy[0],
+            avg_film_surface_energy[0],
+            avg_sub_surface_energy[0],
+        )
 
     def optimizePSO(
         self,

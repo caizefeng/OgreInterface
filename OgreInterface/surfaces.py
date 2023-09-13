@@ -215,7 +215,7 @@ class Surface:
 
         z_frac = 1 - np.mod(np.round(frac_coords[:, -1], 5), 1)
 
-        return (charges * z_frac).sum()
+        return np.round((charges * z_frac).sum(), 4)
 
     @property
     def bottom_surface_charge(self) -> float:
@@ -225,7 +225,7 @@ class Surface:
         )
         z_frac = np.mod(np.round(frac_coords[:, -1], 5), 1)
 
-        return (charges * z_frac).sum()
+        return np.round((charges * z_frac).sum(), 4)
 
     @property
     def atomic_layers(self) -> int:

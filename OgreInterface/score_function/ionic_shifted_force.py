@@ -72,7 +72,7 @@ class IonicShiftedForcePotential:
         # print(f"Getting new distances = {time.time() - s:.5f}")
 
         r0_ij = r0s[idx_i] + r0s[idx_j]
-        print(np.c_[z[idx_i], z[idx_j], r0_ij][:10])
+        # print(np.c_[z[idx_i], z[idx_j], r0_ij][:10])
         # r0_ij = r0_array[
         #     is_film_i.astype(int) + is_film_j.astype(int), z[idx_i], z[idx_j]
         # ]
@@ -124,9 +124,9 @@ class IonicShiftedForcePotential:
         y_energy = y_coulomb + y_born
 
         return (
-            y_energy.astype(np.float64),
-            y_coulomb.astype(np.float64),
-            y_born.astype(np.float64),
+            y_energy.astype(np.float32),
+            y_coulomb.astype(np.float32),
+            y_born.astype(np.float32),
             None,
             None,
         )

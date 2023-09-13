@@ -7,7 +7,7 @@ from matscipy.neighbours import neighbour_list
 
 
 def create_batch(
-    inputs: Dict,
+    inputs: Dict[str, np.ndarray],
     batch_size: int,
 ):
     batch_inputs = {}

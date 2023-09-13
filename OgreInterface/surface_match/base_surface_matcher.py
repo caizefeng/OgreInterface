@@ -41,10 +41,10 @@ class BaseSurfaceMatcher:
         self,
         interface: Interface,
         grid_density: float = 2.5,
-        use_interface_energy: bool = True,
+        # use_interface_energy: bool = True,
     ):
         self.interface = interface
-        self.use_interface_energy = use_interface_energy
+        # self.use_interface_energy = use_interface_energy
 
         self.iface = self.interface.get_interface(orthogonal=True).copy()
 
@@ -52,25 +52,35 @@ class BaseSurfaceMatcher:
             H_inds = np.where(np.array(self.iface.atomic_numbers) == 1)[0]
             self.iface.remove_sites(H_inds)
 
-        if self.use_interface_energy:
-            self.film_part = utils.apply_strain_matrix(
-                structure=self.interface.film.oriented_bulk_structure.copy(),
-                strain_matrix=self.interface._strain_matrix,
-            )
-            self.sub_part = (
-                self.interface.substrate.oriented_bulk_structure.copy()
-            )
-            self.film_part.add_site_property(
-                "is_film",
-                [True] * len(self.film_part),
-            )
-            self.sub_part.add_site_property(
-                "is_film",
-                [False] * len(self.sub_part),
-            )
-        else:
-            self.film_part = self.interface.get_film_supercell().copy()
-            self.sub_part = self.interface.get_substrate_supercell().copy()
+        self.film_bulk = utils.apply_strain_matrix(
+            structure=self.interface.film.oriented_bulk_structure.copy(),
+            strain_matrix=self.interface._strain_matrix,
+        )
+        self.sub_bulk = self.interface.substrate.oriented_bulk_structure.copy()
+
+        self.film_bulk.add_site_property(
+            "is_film",
+            [True] * len(self.film_bulk),
+        )
+        self.sub_bulk.add_site_property(
+            "is_film",
+            [False] * len(self.sub_bulk),
+        )
+
+        # self.sub_surface = utils.get_layer_supercelll(
+        #     structure=self.sub_bulk,
+        #     layers=self.interface.substrate.layers,
+        #     vacuum_scale=0,
+        # )
+
+        # self.film_surface = utils.get_layer_supercelll(
+        #     structure=self.film_bulk,
+        #     layers=self.interface.film.layers,
+        #     vacuum_scale=0,
+        # )
+
+        self.film_sc_part = self.interface.get_film_supercell().copy()
+        self.sub_sc_part = self.interface.get_substrate_supercell().copy()
 
         self.matrix = deepcopy(interface._orthogonal_structure.lattice.matrix)
         self._vol = np.linalg.det(self.matrix)
@@ -91,14 +101,17 @@ class BaseSurfaceMatcher:
         self.shifts = self._generate_shifts()
 
     def _get_interface_energy(self, total_energies: np.ndarray) -> np.ndarray:
-        interface_energies = (
+        adhesion_energies = (
             total_energies - self.film_energy - self.sub_energy
-        ) / (2 * self.interface.area)
+        ) / self.interface.area
 
-        if self.use_interface_energy:
-            return interface_energies
-        else:
-            return 2 * interface_energies
+        interface_energies = (
+            adhesion_energies
+            + self.film_surface_energy
+            + self.sub_surface_energy
+        )
+
+        return adhesion_energies, interface_energies
 
     def _generate_base_inputs(
         self,
@@ -107,7 +120,7 @@ class BaseSurfaceMatcher:
     ):
         inputs = generate_input_dict(
             structure=structure,
-            cutoff=self._cutoff,
+            cutoff=self._cutoff + 5.0,
             interface=is_slab,
         )
 
@@ -835,18 +848,6 @@ class BaseSurfaceMatcher:
         """
         shifts = self.shifts
 
-        sub_inputs = create_batch(inputs=self.sub_inputs, batch_size=1)
-        film_inputs = create_batch(inputs=self.film_inputs, batch_size=1)
-
-        sub_energy, _, _, _, _ = self._calculate(
-            sub_inputs,
-            shifts=np.zeros((1, 3)),
-        )
-        film_energy, _, _, _, _ = self._calculate(
-            film_inputs,
-            shifts=np.zeros((1, 3)),
-        )
-
         energies = []
         grads = []
         for batch_shift in shifts:
@@ -870,7 +871,9 @@ class BaseSurfaceMatcher:
         y_grid = np.linspace(0, 1, self.grid_density_y)
         X, Y = np.meshgrid(x_grid, y_grid)
 
-        Z = self._get_interface_energy(total_energies=interface_energy)
+        Z_adh, Z_iface = self._get_interface_energy(
+            total_energies=interface_energy
+        )
 
         if save_raw_data_file is not None:
             if save_raw_data_file.split(".")[-1] != "npz":
@@ -882,7 +885,7 @@ class BaseSurfaceMatcher:
                 save_raw_data_file,
                 x_shifts=X,
                 y_shifts=Y,
-                energies=Z,
+                energies=Z_iface,
             )
 
         a = self.matrix[0, :2]
@@ -920,7 +923,7 @@ class BaseSurfaceMatcher:
             ax=ax,
             X=X,
             Y=Y,
-            Z=Z,
+            Z=Z_iface,
             dpi=dpi,
             cmap=cmap,
             fontsize=fontsize,
@@ -982,16 +985,9 @@ class BaseSurfaceMatcher:
             coulomb.append(_coulomb)
             born.append(_born)
 
-        interface_energy = self._get_interface_energy(
+        adhesion_energy, interface_energy = self._get_interface_energy(
             total_energies=interface_energy
         )
-        # interface_energy = (
-        #     -(
-        #         (self.film_energy + self.sub_energy)
-        #         - np.array(interface_energy)
-        #     )
-        #     / self.interface.area
-        # )
 
         if save_raw_data_file is not None:
             if save_raw_data_file.split(".")[-1] != "npz":
@@ -1078,8 +1074,8 @@ class BaseSurfaceMatcher:
             _,
         ) = self._calculate(inputs, shifts=np.zeros((1, 3)))
 
-        interface_energy = self._get_interface_energy(
+        adhesion_energy, interface_energy = self._get_interface_energy(
             total_energies=total_energy,
         )
 
-        return interface_energy[0]
+        return adhesion_energy[0], interface_energy[0]
