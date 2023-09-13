@@ -31,6 +31,8 @@ class IonicShiftedForcePotential:
         self,
         inputs: Dict[str, np.ndarray],
         shift: np.ndarray,
+        constant_coulomb_contribution: Optional[np.ndarray] = None,
+        constant_born_contribution: Optional[np.ndarray] = None,
         # r0_array: np.ndarray,
     ) -> Dict[str, np.ndarray]:
         q = inputs["partial_charges"]
@@ -101,6 +103,10 @@ class IonicShiftedForcePotential:
         # s = time.time()
         y_dsf = scatter_add_bin(y_dsf, idx_i, dim_size=n_atoms)
         y_dsf = scatter_add_bin(y_dsf, idx_m, dim_size=n_molecules)
+
+        if constant_coulomb_contribution is not None:
+            y_dsf += np.tile(constant_coulomb_contribution, n_molecules)
+
         y_dsf_self = scatter_add_bin(y_dsf_self, idx_m, dim_size=n_molecules)
         y_coulomb = 0.5 * self.ke * (y_dsf - y_dsf_self).reshape(-1)
         # print(f"Shifted Force Accumulation = {time.time() - s:.5f}")
@@ -118,7 +124,14 @@ class IonicShiftedForcePotential:
         # s = time.time()
         y_born = scatter_add_bin(y_born, idx_i, dim_size=n_atoms)
         y_born = scatter_add_bin(y_born, idx_m, dim_size=n_molecules)
+
+        if constant_born_contribution is not None:
+            y_born += np.tile(constant_born_contribution, n_molecules) / (
+                0.5 * self.ke
+            )
+
         y_born = 0.5 * self.ke * y_born.reshape(-1)
+
         # print(f"Born Accumulation = {time.time() - s:.5f}")
 
         y_energy = y_coulomb + y_born
@@ -127,7 +140,7 @@ class IonicShiftedForcePotential:
             y_energy.astype(np.float32),
             y_coulomb.astype(np.float32),
             y_born.astype(np.float32),
-            None,
+            y_dsf,
             None,
         )
 

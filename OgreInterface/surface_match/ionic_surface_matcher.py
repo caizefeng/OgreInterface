@@ -8,7 +8,7 @@ from pymatgen.core.periodic_table import Element
 from pymatgen.analysis.local_env import CrystalNN
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.data import chemical_symbols, covalent_radii
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from ase import Atoms
 import numpy as np
 import matplotlib.pyplot as plt
@@ -88,10 +88,14 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self.opt_xy_shift = np.zeros(2)
         self.opt_d_interface = self.d_interface
 
-        self.iface_inputs = self._generate_base_inputs(
+        all_iface_inputs = self._generate_base_inputs(
             structure=self.iface,
             is_slab=True,
         )
+        self.const_iface_inputs, self.iface_inputs = self._get_iface_parts(
+            inputs=all_iface_inputs
+        )
+
         self.sub_sc_inputs = self._generate_base_inputs(
             structure=self.sub_sc_part,
             is_slab=True,
@@ -134,12 +138,41 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             self.sub_bulk_energy,
             self.film_surface_energy,
             self.sub_surface_energy,
-        ) = self._get_film_sub_energies()
+            self.const_iface_energy,
+        ) = self._get_const_energies()
         # print("Sub Total Energy = ", self.sub_energy)
         # print("Film Total Energy = ", self.film_energy)
         # print("Film Surface Energy = ", self.film_surface_energy)
         # print("Sub Surface Energy = ", self.sub_surface_energy)
         # print("")
+
+    def _get_iface_parts(
+        self,
+        inputs: Dict[str, np.ndarray],
+    ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+        film_film_mask = (
+            inputs["is_film"][inputs["idx_i"]]
+            & inputs["is_film"][inputs["idx_j"]]
+        )
+        sub_sub_mask = (~inputs["is_film"])[inputs["idx_i"]] & (
+            ~inputs["is_film"]
+        )[inputs["idx_j"]]
+
+        const_mask = np.logical_or(film_film_mask, sub_sub_mask)
+        # const_mask = film_film_mask
+
+        const_inputs = {}
+        variable_inputs = {}
+
+        for k, v in inputs.items():
+            if "idx" in k or "offsets" in k:
+                const_inputs[k] = v[const_mask]
+                variable_inputs[k] = v[~const_mask]
+            else:
+                const_inputs[k] = v
+                variable_inputs[k] = v
+
+        return const_inputs, variable_inputs
 
     def _get_pseudo_surface_inputs(
         self,
@@ -173,10 +206,11 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         self._add_born_ns(self.iface)
         self._add_r0s(self.iface)
-        self.iface_inputs = self._generate_base_inputs(
+        iface_inputs = self._generate_base_inputs(
             structure=self.iface,
             is_slab=True,
         )
+        _, self.iface_inputs = self._get_iface_parts(inputs=iface_inputs)
 
         self.opt_xy_shift[:2] = 0.0
         self.d_interface = self.opt_d_interface
@@ -401,12 +435,14 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             inputs=self.iface_inputs,
             batch_size=len(x),
         )
-        E, _, _, _, _ = self._calculate(inputs=batch_inputs, shifts=shift)
+        E, _, _, _, _ = self._calculate_iface_energy(
+            inputs=batch_inputs, shifts=shift
+        )
         E_adh, E_iface = self._get_interface_energy(total_energies=E)
 
         return E_iface
 
-    def _get_film_sub_energies(self):
+    def _get_const_energies(self):
         sub_sc_inputs = create_batch(
             inputs=self.sub_sc_inputs,
             batch_size=1,
@@ -416,14 +452,10 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             batch_size=1,
         )
 
-        # sub_surface_inputs = create_batch(
-        #     inputs=self.sub_surface_inputs,
-        #     batch_size=1,
-        # )
-        # film_surface_inputs = create_batch(
-        #     inputs=self.film_surface_inputs,
-        #     batch_size=1,
-        # )
+        const_iface_inputs = create_batch(
+            inputs=self.const_iface_inputs,
+            batch_size=1,
+        )
 
         sub_bulk_inputs = create_batch(
             inputs=self.sub_bulk_inputs,
@@ -443,6 +475,20 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             shifts=np.zeros((1, 3)),
         )
 
+        (
+            const_iface_energy,
+            _,
+            self.const_born_energy,
+            self.const_coulomb_energy,
+            _,
+        ) = self._calculate(
+            const_iface_inputs,
+            shifts=np.zeros((1, 3)),
+        )
+
+        print(f"{self.const_born_energy = }")
+        print(f"{self.const_coulomb_energy = }")
+
         sub_bulk_energy, _, _, _, _ = self._calculate(
             sub_bulk_inputs,
             shifts=np.zeros((1, 3)),
@@ -460,6 +506,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         #     film_surface_inputs,
         #     shifts=np.zeros((1, 3)),
         # )
+        print(const_iface_energy)
 
         N_sub_layers = self.interface.substrate.layers
         N_film_layers = self.interface.film.layers
@@ -495,6 +542,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             sub_bulk_energy[0],
             avg_film_surface_energy[0],
             avg_sub_surface_energy[0],
+            const_iface_energy[0],
         )
 
     def optimizePSO(
@@ -537,6 +585,20 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         outputs = ionic_potential.forward(
             inputs=inputs,
             shift=shifts,
+            # r0_array=self.r0_array,
+        )
+
+        return outputs
+
+    def _calculate_iface_energy(self, inputs: Dict, shifts: np.ndarray):
+        ionic_potential = IonicShiftedForcePotential(
+            cutoff=self._cutoff,
+        )
+        outputs = ionic_potential.forward(
+            inputs=inputs,
+            shift=shifts,
+            constant_coulomb_contribution=self.const_coulomb_energy,
+            constant_born_contribution=self.const_born_energy,
             # r0_array=self.r0_array,
         )
 

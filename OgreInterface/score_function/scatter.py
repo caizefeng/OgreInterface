@@ -45,7 +45,9 @@ def scatter_add_bin(
     Returns:
         reduced input
     """
-    y = np.bincount(idx_i, weights=x)
+    y = np.zeros(dim_size)
+    tmp = np.bincount(idx_i, weights=x)
+    y[np.arange(len(tmp)).astype(int)] = tmp
     # shape = list(x.shape)
     # shape[dim] = dim_size
     # y = np.zeros(shape, dtype=x.dtype)

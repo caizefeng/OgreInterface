@@ -302,6 +302,8 @@ class InterfaceSearch:
             opt_abz_shifts.append([a_shift, b_shift, opt_d])
 
             adh_energy, int_energy = intE_matcher.get_current_energy()
+            print(adh_energy)
+            print(int_energy)
             film_surface_energy = intE_matcher.film_surface_energy
             sub_surface_energy = intE_matcher.sub_surface_energy
             surface_energies.append([film_surface_energy, sub_surface_energy])

@@ -861,7 +861,7 @@ class BaseSurfaceMatcher:
                 _,
                 batch_grads,
                 _,
-            ) = self._calculate(batch_inputs, shifts=batch_shift)
+            ) = self._calculate_iface_energy(batch_inputs, shifts=batch_shift)
             energies.append(batch_energies)
             grads.append(batch_grads)
 
@@ -980,7 +980,9 @@ class BaseSurfaceMatcher:
                 _born,
                 _,
                 _,
-            ) = self._calculate(inputs, shifts=shift.reshape(1, -1))
+            ) = self._calculate_iface_energy(
+                inputs, shifts=shift.reshape(1, -1)
+            )
             interface_energy.append(_interface_energy)
             coulomb.append(_coulomb)
             born.append(_born)
@@ -1072,7 +1074,7 @@ class BaseSurfaceMatcher:
             _,
             _,
             _,
-        ) = self._calculate(inputs, shifts=np.zeros((1, 3)))
+        ) = self._calculate_iface_energy(inputs, shifts=np.zeros((1, 3)))
 
         adhesion_energy, interface_energy = self._get_interface_energy(
             total_energies=total_energy,
