@@ -435,6 +435,11 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             inputs=self.iface_inputs,
             batch_size=len(x),
         )
+        n_atoms = batch_inputs["n_atoms"]
+        shifts = np.repeat(shift, repeats=n_atoms, axis=0)
+        shifts[~batch_inputs["is_film"]] *= 0.0
+        # batch_inputs["R"] += shifts
+
         E, _, _, _, _ = self._calculate_iface_energy(
             inputs=batch_inputs, shifts=shift
         )
