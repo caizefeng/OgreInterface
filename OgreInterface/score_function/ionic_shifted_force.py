@@ -30,7 +30,7 @@ class IonicShiftedForcePotential:
     def forward(
         self,
         inputs: Dict[str, np.ndarray],
-        shift: np.ndarray,
+        # shift: np.ndarray,
         constant_coulomb_contribution: Optional[np.ndarray] = None,
         constant_born_contribution: Optional[np.ndarray] = None,
         # r0_array: np.ndarray,
@@ -47,60 +47,29 @@ class IonicShiftedForcePotential:
 
         idx_i_all = inputs["idx_i"]
         idx_j_all = inputs["idx_j"]
-        is_film = inputs["is_film"]
-        is_sub = ~is_film
 
         R = inputs["R"]
 
-        shifts = np.repeat(
-            shift.astype(np.float32),
-            repeats=inputs["n_atoms"],
-            axis=0,
-        )
-        shifts[is_sub] *= 0.0
-
-        # s = time.time()
-        R_shift = R + shifts
-        r_ij_all = R_shift[idx_j_all] - R_shift[idx_i_all] + inputs["offsets"]
+        r_ij_all = R[idx_j_all] - R[idx_i_all] + inputs["offsets"]
 
         distances = np.sqrt(np.einsum("ij,ij->i", r_ij_all, r_ij_all))
-        # print(f"Getting all distances = {time.time() - s:.5f}")
 
-        # s = time.time()
         in_cutoff = distances <= self.cutoff
         idx_i = idx_i_all[in_cutoff]
         idx_j = idx_j_all[in_cutoff]
         d_ij = distances[in_cutoff]
-        # print(f"Getting new distances = {time.time() - s:.5f}")
 
         r0_ij = r0s[idx_i] + r0s[idx_j]
-        # print(np.c_[z[idx_i], z[idx_j], r0_ij][:10])
-        # r0_ij = r0_array[
-        #     is_film_i.astype(int) + is_film_j.astype(int), z[idx_i], z[idx_j]
-        # ]
         n_ij = (ns[idx_i] + ns[idx_j]) / 2
         q_ij = q[idx_i] * q[idx_j]
 
-        # B_ij = (torch.abs(q_ij) * (r0_ij ** (n_ij - 1.0))) / n_ij
-        # s = time.time()
         B_ij = -self._calc_B(r0_ij=r0_ij, n_ij=n_ij, q_ij=q_ij)
-        # print(f"Prefactor Calculations = {time.time() - s:.5f}")
 
         n_atoms = z.shape[0]
         n_molecules = int(idx_m[-1]) + 1
 
-        # s = time.time()
         y_dsf, y_dsf_self = self._damped_shifted_force(d_ij, q_ij, q)
-        # print(f"Shifted Force Calc = {time.time() - s:.5f}")
 
-        # # s = time.time()
-        # y_dsf = scatter_add(y_dsf, idx_i, dim_size=n_atoms)
-        # y_dsf = scatter_add(y_dsf, idx_m, dim_size=n_molecules)
-        # y_dsf_self = scatter_add(y_dsf_self, idx_m, dim_size=n_molecules)
-        # y_coulomb = 0.5 * self.ke * (y_dsf - y_dsf_self).reshape(-1)
-        # # print(f"Shifted Force Accumulation = {time.time() - s:.5f}")
-
-        # s = time.time()
         y_dsf = scatter_add_bin(y_dsf, idx_i, dim_size=n_atoms)
         y_dsf = scatter_add_bin(y_dsf, idx_m, dim_size=n_molecules)
 
@@ -109,19 +78,9 @@ class IonicShiftedForcePotential:
 
         y_dsf_self = scatter_add_bin(y_dsf_self, idx_m, dim_size=n_molecules)
         y_coulomb = 0.5 * self.ke * (y_dsf - y_dsf_self).reshape(-1)
-        # print(f"Shifted Force Accumulation = {time.time() - s:.5f}")
 
-        # s = time.time()
         y_born = self._born(d_ij, n_ij, B_ij)
-        # print(f"Born Calc = {time.time() - s:.5f}")
 
-        # # s = time.time()
-        # y_born = scatter_add(y_born, idx_i, dim_size=n_atoms)
-        # y_born = scatter_add(y_born, idx_m, dim_size=n_molecules)
-        # y_born = 0.5 * self.ke * y_born.reshape(-1)
-        # # print(f"Born Accumulation = {time.time() - s:.5f}")
-
-        # s = time.time()
         y_born = scatter_add_bin(y_born, idx_i, dim_size=n_atoms)
         y_born = scatter_add_bin(y_born, idx_m, dim_size=n_molecules)
 
@@ -131,8 +90,6 @@ class IonicShiftedForcePotential:
             )
 
         y_born = 0.5 * self.ke * y_born.reshape(-1)
-
-        # print(f"Born Accumulation = {time.time() - s:.5f}")
 
         y_energy = y_coulomb + y_born
 

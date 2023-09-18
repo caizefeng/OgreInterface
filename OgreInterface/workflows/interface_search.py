@@ -1,5 +1,6 @@
 from OgreInterface.generate import InterfaceGenerator, SurfaceGenerator
 from OgreInterface.surface_match import IonicSurfaceMatcher
+from OgreInterface.surface_energy import IonicSurfaceEnergy
 from OgreInterface import utils
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.core.structure import Structure
@@ -15,7 +16,7 @@ import seaborn as sns
 from typing import Union, List, Tuple
 
 
-class InterfaceSearch:
+class IonicInterfaceSearch:
     """Class to perform a miller index scan to find all domain matched interfaces of various surfaces.
 
     Examples:
@@ -53,6 +54,14 @@ class InterfaceSearch:
         max_area: float = 500.0,
         refine_structure: bool = True,
         suppress_warnings: bool = False,
+        auto_determine_born_n: bool = False,
+        born_n: float = 12.0,
+        n_particles_PSO: int = 15,
+        max_iterations_PSO: int = 150,
+        z_bounds_PSO: List[float] = [1.0, 6.0],
+        grid_density_PES: float = 2.5,
+        use_most_stable_substrate: bool = True,
+        cmap_PES=cm.lipari,
     ):
         self._refine_structure = refine_structure
         self._suppress_warnings = suppress_warnings
@@ -68,6 +77,13 @@ class InterfaceSearch:
         else:
             self._film_bulk, _ = self._get_bulk(film_bulk)
 
+        self._auto_determine_born_n = auto_determine_born_n
+        self._born_n = born_n
+        self._n_particles_PSO = n_particles_PSO
+        self._max_iterations_PSO = max_iterations_PSO
+        self._z_bounds_PSO = z_bounds_PSO
+        self._use_most_stable_substrate = use_most_stable_substrate
+        self._grid_density_PES = grid_density_PES
         self._minimum_slab_thickness = minimum_slab_thickness
         self._substrate_miller_index = substrate_miller_index
         self._film_miller_index = film_miller_index
@@ -75,6 +91,7 @@ class InterfaceSearch:
         self._max_angle_strain = max_angle_strain
         self._max_linear_strain = max_linear_strain
         self._max_area = max_area
+        self._cmap_PES = cmap_PES
 
     def _get_bulk(self, atoms_or_struc):
         if type(atoms_or_struc) == Atoms:
@@ -174,27 +191,53 @@ class InterfaceSearch:
 
         return substrate_generator, film_generator
 
+    def _get_most_stable_surface(
+        self, surface_generator: SurfaceGenerator
+    ) -> List[int]:
+        surface_energies = []
+        for surface in surface_generator:
+            surfE_calculator = IonicSurfaceEnergy(surface=surface)
+            surface_energies.append(surfE_calculator.get_surface_energy())
+
+        surface_energies = np.round(np.array(surface_energies), 6)
+        min_surface_energy = surface_energies.min()
+
+        most_stable_indices = np.where(surface_energies == min_surface_energy)
+        print(most_stable_indices)
+
+        return most_stable_indices[0]
+
     def _get_film_and_substrate_inds(
         self,
-        film_generator,
-        substrate_generator,
+        film_generator: SurfaceGenerator,
+        substrate_generator: SurfaceGenerator,
         filter_on_charge: bool = True,
     ) -> List[Tuple[int, int]]:
         film_and_substrate_inds = []
 
+        if self._use_most_stable_substrate:
+            substrate_inds_to_use = self._get_most_stable_surface(
+                surface_generator=substrate_generator
+            )
+        else:
+            substrate_inds_to_use = np.arange(len(substrate_generator)).astype(
+                int
+            )
+
         for i, film in enumerate(film_generator):
             for j, sub in enumerate(substrate_generator):
-                if filter_on_charge:
-                    sub_sign = np.sign(sub.top_surface_charge)
-                    film_sign = np.sign(film.bottom_surface_charge)
+                if j in substrate_inds_to_use:
+                    if filter_on_charge:
+                        sub_sign = np.sign(sub.top_surface_charge)
+                        film_sign = np.sign(film.bottom_surface_charge)
 
-                    if sub_sign == 0.0 or film_sign == 0.0:
-                        film_and_substrate_inds.append((i, j))
-                    else:
-                        if np.sign(sub_sign * film_sign) < 0.0:
+                        if sub_sign == 0.0 or film_sign == 0.0:
                             film_and_substrate_inds.append((i, j))
-                else:
-                    film_and_substrate_inds.append((i, j))
+                        else:
+                            if np.sign(sub_sign * film_sign) < 0.0:
+                                film_and_substrate_inds.append((i, j))
+                    else:
+                        film_and_substrate_inds.append((i, j))
 
         return film_and_substrate_inds
 
@@ -204,10 +247,11 @@ class InterfaceSearch:
         output_folder: str = None,
     ):
         substrate_generator, film_generator = self._get_surface_generators()
+
         film_and_substrate_inds = self._get_film_and_substrate_inds(
             film_generator=film_generator,
             substrate_generator=substrate_generator,
-            filter_on_charge=True,
+            filter_on_charge=filter_on_charge,
         )
 
         if output_folder is not None:
@@ -244,7 +288,7 @@ class InterfaceSearch:
             surface_charges.append([film_surface_charge, sub_surface_charge])
 
             film.write_file(join(interface_dir, f"POSCAR_film_{film_ind}"))
-            sub.write_file(join(interface_dir, f"POSCAR_sub_{sub_ind}"))
+            sub.write_file(join(interface_dir, f"POSCAR_substrate_{sub_ind}"))
 
             interface_generator = InterfaceGenerator(
                 substrate=sub,
@@ -264,36 +308,36 @@ class InterfaceSearch:
 
             intE_matcher = IonicSurfaceMatcher(
                 interface=interface,
-                auto_determine_born_n=False,
-                born_n=12.0,
-                grid_density=2.5,
+                auto_determine_born_n=self._auto_determine_born_n,
+                born_n=self._born_n,
+                grid_density=self._grid_density_PES,
             )
 
             _ = intE_matcher.optimizePSO(
-                z_bounds=[1.0, 6.0],
-                max_iters=150,
-                n_particles=12,
+                z_bounds=self._z_bounds_PSO,
+                max_iters=self._max_iterations_PSO,
+                n_particles=self._n_particles_PSO,
             )
             intE_matcher.get_optimized_structure()
-            opt_d_PSO = interface.interfacial_distance
+            opt_d_pso = interface.interfacial_distance
 
             intE_matcher.run_surface_matching(
                 output=join(interface_dir, "PES_opt.png"),
                 fontsize=14,
-                cmap=cm.lipari,
+                cmap=self._cmap_PES,
             )
             intE_matcher.get_optimized_structure()
 
             intE_matcher.run_z_shift(
                 interfacial_distances=np.linspace(
-                    max(1.0, opt_d_PSO - 2.0),
-                    opt_d_PSO + 2.0,
+                    max(1.0, opt_d_pso - 2.0),
+                    opt_d_pso + 2.0,
                     31,
                 ),
                 output=join(interface_dir, "z_shift.png"),
             )
             intE_matcher.get_optimized_structure()
-            interface.write_file(join(interface_dir, "POSCAR_int"))
+            interface.write_file(join(interface_dir, "POSCAR_interface"))
 
             opt_d = interface.interfacial_distance
             a_shift = np.mod(interface._a_shift, 1.0)
@@ -302,8 +346,6 @@ class InterfaceSearch:
             opt_abz_shifts.append([a_shift, b_shift, opt_d])
 
             adh_energy, int_energy = intE_matcher.get_current_energy()
-            print(adh_energy)
-            print(int_energy)
             film_surface_energy = intE_matcher.film_surface_energy
             sub_surface_energy = intE_matcher.sub_surface_energy
             surface_energies.append([film_surface_energy, sub_surface_energy])

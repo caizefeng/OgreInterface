@@ -101,7 +101,6 @@ def generate_input_dict(
 ) -> Dict:
     site_props = structure.site_properties
 
-    is_film = np.array(site_props["is_film"]).astype(bool)
     R = structure.cart_coords
     cell = deepcopy(structure.lattice.matrix)
 
@@ -128,12 +127,15 @@ def generate_input_dict(
         "R": R,
         "cell": cell.reshape(-1, 3, 3),
         "pbc": pbc.reshape(-1, 3),
-        "is_film": is_film,
         "e_negs": e_negs,
         "idx_i": idx_i,
         "idx_j": idx_j,
         "offsets": offsets,
     }
+
+    if "is_film" in site_props:
+        is_film = np.array(site_props["is_film"]).astype(bool)
+        input_dict["is_film"] = is_film
 
     if "charge" in site_props:
         charges = np.array(site_props["charge"])

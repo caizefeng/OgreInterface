@@ -47,8 +47,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self,
         interface: Interface,
         grid_density: float = 2.5,
-        # use_interface_energy: bool = True,
-        auto_determine_born_n: bool = True,
+        auto_determine_born_n: bool = False,
         born_n: float = 12.0,
     ):
         super().__init__(
@@ -174,19 +173,19 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return const_inputs, variable_inputs
 
-    def _get_pseudo_surface_inputs(
-        self,
-        inputs: Dict[str, np.ndarray],
-        is_film: bool = True,
-    ) -> Dict[str, np.ndarray]:
-        if is_film:
-            mask = inputs["offsets"][:, -1] >= 0.0
-        else:
-            mask = inputs["offsets"][:, -1] <= 0.0
+    # def _get_pseudo_surface_inputs(
+    #     self,
+    #     inputs: Dict[str, np.ndarray],
+    #     is_film: bool = True,
+    # ) -> Dict[str, np.ndarray]:
+    #     if is_film:
+    #         mask = inputs["offsets"][:, -1] >= 0.0
+    #     else:
+    #         mask = inputs["offsets"][:, -1] <= 0.0
 
-        for k, v in inputs.items():
-            if "idx" in k or "offsets" in k:
-                inputs[k] = v[mask]
+    #     for k, v in inputs.items():
+    #         if "idx" in k or "offsets" in k:
+    #             inputs[k] = v[mask]
 
     def get_optimized_structure(self):
         opt_shift = self.opt_xy_shift
@@ -329,6 +328,63 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return neighbor_dict, mean_radius_dict
 
+    def _get_neighborhood_info_en(self, struc, charge_dict):
+        struc.add_oxidation_state_by_element(charge_dict)
+        Zs = np.unique(struc.atomic_numbers)
+        combos = combinations_with_replacement(Zs, 2)
+        neighbor_dict = {c: None for c in combos}
+
+        neighbor_list = []
+        ionic_radii_dict = {Z: [] for Z in Zs}
+
+        cnn = CrystalNN(search_cutoff=7.0, cation_anion=True)
+        for i, site in enumerate(struc.sites):
+            info_dict = cnn.get_nn_info(struc, i)
+            for neighbor in info_dict:
+                dist = site.distance(neighbor["site"])
+                species = tuple(
+                    sorted([site.specie.Z, neighbor["site"].specie.Z])
+                )
+                neighbor_list.append([species, dist])
+
+        sorted_neighbor_list = sorted(neighbor_list, key=lambda x: x[0])
+        groups = groupby(sorted_neighbor_list, key=lambda x: x[0])
+
+        for group in groups:
+            nn = list(zip(*group[1]))[1]
+            neighbor_dict[group[0]] = np.min(nn)
+
+        for n, d in neighbor_dict.items():
+            s1 = chemical_symbols[n[0]]
+            s2 = chemical_symbols[n[1]]
+            c1 = charge_dict[s1]
+            c2 = charge_dict[s2]
+
+            e1 = Element(s1).X ** 2
+            e2 = Element(s2).X ** 2
+            # d1 = covalent_radii[n[0]]
+            # d2 = covalent_radii[n[1]]
+            d1 = Element(s1).atomic_radius
+            d2 = Element(s2).atomic_radius
+
+            eneg_frac = e1 / (e1 + e2)
+            print(s1, s2, eneg_frac)
+            d1 *= 0.5 + eneg_frac
+            d2 *= 0.5 + (1 - eneg_frac)
+            radius_frac = d1 / (d1 + d2)
+
+            if d is None:
+                neighbor_dict[n] = d1 + d2
+            else:
+                r0_1 = radius_frac * d
+                r0_2 = (1 - radius_frac) * d
+                ionic_radii_dict[n[0]].append(r0_1)
+                ionic_radii_dict[n[1]].append(r0_2)
+
+        mean_radius_dict = {k: np.mean(v) for k, v in ionic_radii_dict.items()}
+
+        return neighbor_dict, mean_radius_dict
+
     def _get_r0s(self, sub, film, charge_dict):
         sub_dict, sub_radii_dict = self._get_neighborhood_info(
             sub, charge_dict
@@ -336,6 +392,25 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         film_dict, film_radii_dict = self._get_neighborhood_info(
             film, charge_dict
         )
+
+        # print("Old:")
+        # print(sub_radii_dict)
+        # print(film_radii_dict)
+        # print()
+
+        # _, sub_radii_dict = self._get_neighborhood_info_en(sub, charge_dict)
+        # _, film_radii_dict = self._get_neighborhood_info_en(film, charge_dict)
+
+        # print("New:")
+        # print(sub_radii_dict)
+        # print(film_radii_dict)
+        # print()
+
+        # print(sub_radii_dict)
+        # print(sub_radii_dict_en)
+
+        # print(film_radii_dict)
+        # print(film_radii_dict_en)
 
         r0_dict = {"film": film_radii_dict, "sub": sub_radii_dict}
 
@@ -414,18 +489,18 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         # return r0_array.astype(np.float32)
 
-    def bo_function(self, a, b, z):
-        frac_ab = np.array([a, b]).reshape(1, 2)
-        cart_xy = self.get_cart_xy_shifts(frac_ab)
-        z_shift = z - self.d_interface
-        shift = np.c_[cart_xy, z_shift * np.ones(len(cart_xy))]
-        batch_inputs = create_batch(
-            inputs=self.iface_inputs,
-            batch_size=1,
-        )
-        E, _, _, _, _ = self._calculate(inputs=batch_inputs, shifts=shift)
+    # def bo_function(self, a, b, z):
+    #     frac_ab = np.array([a, b]).reshape(1, 2)
+    #     cart_xy = self.get_cart_xy_shifts(frac_ab)
+    #     z_shift = z - self.d_interface
+    #     shift = np.c_[cart_xy, z_shift * np.ones(len(cart_xy))]
+    #     batch_inputs = create_batch(
+    #         inputs=self.iface_inputs,
+    #         batch_size=1,
+    #     )
+    #     E, _, _, _, _ = self._calculate(inputs=batch_inputs, shifts=shift)
 
-        return -E[0]
+    #     return -E[0]
 
     def pso_function(self, x):
         cart_xy = self.get_cart_xy_shifts(x[:, :2])
@@ -435,13 +510,15 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             inputs=self.iface_inputs,
             batch_size=len(x),
         )
-        n_atoms = batch_inputs["n_atoms"]
-        shifts = np.repeat(shift, repeats=n_atoms, axis=0)
-        shifts[~batch_inputs["is_film"]] *= 0.0
-        # batch_inputs["R"] += shifts
 
-        E, _, _, _, _ = self._calculate_iface_energy(
-            inputs=batch_inputs, shifts=shift
+        self._add_shifts_to_batch(
+            batch_inputs=batch_inputs,
+            shifts=shift,
+        )
+
+        E, _, _, _, _ = self._calculate(
+            inputs=batch_inputs,
+            is_interface=True,
         )
         E_adh, E_iface = self._get_interface_energy(total_energies=E)
 
@@ -473,11 +550,11 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         sub_sc_energy, _, _, _, _ = self._calculate(
             sub_sc_inputs,
-            shifts=np.zeros((1, 3)),
+            is_interface=False,
         )
         film_sc_energy, _, _, _, _ = self._calculate(
             film_sc_inputs,
-            shifts=np.zeros((1, 3)),
+            is_interface=False,
         )
 
         (
@@ -488,30 +565,17 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             _,
         ) = self._calculate(
             const_iface_inputs,
-            shifts=np.zeros((1, 3)),
+            is_interface=False,
         )
-
-        print(f"{self.const_born_energy = }")
-        print(f"{self.const_coulomb_energy = }")
 
         sub_bulk_energy, _, _, _, _ = self._calculate(
             sub_bulk_inputs,
-            shifts=np.zeros((1, 3)),
+            is_interface=False,
         )
         film_bulk_energy, _, _, _, _ = self._calculate(
             film_bulk_inputs,
-            shifts=np.zeros((1, 3)),
+            is_interface=False,
         )
-
-        # sub_surface_energy, _, _, _, _ = self._calculate(
-        #     sub_surface_inputs,
-        #     shifts=np.zeros((1, 3)),
-        # )
-        # film_surface_energy, _, _, _, _ = self._calculate(
-        #     film_surface_inputs,
-        #     shifts=np.zeros((1, 3)),
-        # )
-        print(const_iface_energy)
 
         N_sub_layers = self.interface.substrate.layers
         N_film_layers = self.interface.film.layers
@@ -520,25 +584,12 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         film_bulk_scale = N_film_layers * N_film_sc
         sub_bulk_scale = N_sub_layers * N_sub_sc
 
-        # sub_bulk_energy *= sub_bulk_scale
-        # film_bulk_energy *= film_bulk_scale
-
         avg_film_surface_energy = (
             film_sc_energy - (film_bulk_scale * film_bulk_energy)
         ) / (2 * self.interface.area)
         avg_sub_surface_energy = (
             sub_sc_energy - (sub_bulk_scale * sub_bulk_energy)
         ) / (2 * self.interface.area)
-
-        # film_surface_E = (
-        #     film_surface_energy - (N_film_layers * film_bulk_energy)
-        # ) / (self.interface.film.area)
-        # sub_surface_E = (
-        #     sub_surface_energy - (N_sub_layers * sub_bulk_energy)
-        # ) / (self.interface.substrate.area)
-
-        # print(avg_film_surface_energy, avg_sub_surface_energy)
-        # print(film_surface_E, sub_surface_E)
 
         return (
             film_sc_energy[0],
@@ -583,31 +634,37 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return opt_score
 
-    def _calculate(self, inputs: Dict, shifts: np.ndarray):
+    def _calculate(self, inputs: Dict, is_interface: bool = True):
         ionic_potential = IonicShiftedForcePotential(
             cutoff=self._cutoff,
         )
-        outputs = ionic_potential.forward(
-            inputs=inputs,
-            shift=shifts,
-            # r0_array=self.r0_array,
-        )
+
+        if is_interface:
+            outputs = ionic_potential.forward(
+                inputs=inputs,
+                constant_coulomb_contribution=self.const_coulomb_energy,
+                constant_born_contribution=self.const_born_energy,
+            )
+        else:
+            outputs = ionic_potential.forward(
+                inputs=inputs,
+            )
 
         return outputs
 
-    def _calculate_iface_energy(self, inputs: Dict, shifts: np.ndarray):
-        ionic_potential = IonicShiftedForcePotential(
-            cutoff=self._cutoff,
-        )
-        outputs = ionic_potential.forward(
-            inputs=inputs,
-            shift=shifts,
-            constant_coulomb_contribution=self.const_coulomb_energy,
-            constant_born_contribution=self.const_born_energy,
-            # r0_array=self.r0_array,
-        )
+    # def _calculate_iface_energy(self, inputs: Dict, shifts: np.ndarray):
+    #     ionic_potential = IonicShiftedForcePotential(
+    #         cutoff=self._cutoff,
+    #     )
+    #     outputs = ionic_potential.forward(
+    #         inputs=inputs,
+    #         shift=shifts,
+    #         constant_coulomb_contribution=self.const_coulomb_energy,
+    #         constant_born_contribution=self.const_born_energy,
+    #         # r0_array=self.r0_array,
+    #     )
 
-        return outputs
+    #     return outputs
 
     # def _run_bulk(
     #     self,

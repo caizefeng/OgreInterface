@@ -4,7 +4,7 @@ from OgreInterface.score_function.generate_inputs import (
     create_batch,
 )
 from OgreInterface import utils
-from typing import List
+from typing import List, Dict
 import numpy as np
 from matplotlib.colors import Normalize, ListedColormap
 import matplotlib.pyplot as plt
@@ -126,14 +126,20 @@ class BaseSurfaceMatcher:
 
         return inputs
 
-    # def _generate_bulk_inputs(self, structure: Structure):
-    #     inputs = generate_input_dict(
-    #         structure=structure,
-    #         cutoff=self._cutoff,
-    #         interface=False,
-    #     )
-
-    #     return inputs
+    def _add_shifts_to_batch(
+        self,
+        batch_inputs: Dict[str, np.ndarray],
+        shifts: np.ndarray,
+    ) -> None:
+        if "is_film" in batch_inputs:
+            n_atoms = batch_inputs["n_atoms"]
+            all_shifts = np.repeat(
+                shifts.astype(batch_inputs["R"].dtype), repeats=n_atoms, axis=0
+            )
+            all_shifts[~batch_inputs["is_film"]] *= 0.0
+            batch_inputs["R"] += all_shifts
+        else:
+            raise "_add_shifts_to_batch should only be used on interfaces that have the is_film property"
 
     def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 15):
         bounds = (
@@ -849,21 +855,23 @@ class BaseSurfaceMatcher:
         shifts = self.shifts
 
         energies = []
-        grads = []
         for batch_shift in shifts:
             batch_inputs = create_batch(
                 inputs=self.iface_inputs,
                 batch_size=len(batch_shift),
             )
+            self._add_shifts_to_batch(
+                batch_inputs=batch_inputs,
+                shifts=batch_shift,
+            )
             (
                 batch_energies,
                 _,
                 _,
-                batch_grads,
                 _,
-            ) = self._calculate_iface_energy(batch_inputs, shifts=batch_shift)
+                _,
+            ) = self._calculate(batch_inputs, is_interface=True)
             energies.append(batch_energies)
-            grads.append(batch_grads)
 
         interface_energy = np.vstack(energies)
 
@@ -973,15 +981,13 @@ class BaseSurfaceMatcher:
         born = []
         for shift in shifts:
             inputs = create_batch(self.iface_inputs, batch_size=1)
+            self._add_shifts_to_batch(
+                batch_inputs=inputs, shifts=shift.reshape(1, -1)
+            )
 
-            (
-                _interface_energy,
-                _coulomb,
-                _born,
-                _,
-                _,
-            ) = self._calculate_iface_energy(
-                inputs, shifts=shift.reshape(1, -1)
+            (_interface_energy, _coulomb, _born, _, _,) = self._calculate(
+                inputs,
+                is_interface=True,
             )
             interface_energy.append(_interface_energy)
             coulomb.append(_coulomb)
@@ -1074,7 +1080,7 @@ class BaseSurfaceMatcher:
             _,
             _,
             _,
-        ) = self._calculate_iface_energy(inputs, shifts=np.zeros((1, 3)))
+        ) = self._calculate(inputs, is_interface=True)
 
         adhesion_energy, interface_energy = self._get_interface_energy(
             total_energies=total_energy,

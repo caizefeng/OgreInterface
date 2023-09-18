@@ -2176,28 +2176,25 @@ class Interface:
         sc_matrix = supercell_slab.lattice.matrix
         sub_sc_matrix = self._substrate_supercell.lattice.matrix
 
-        strained_matrix = np.vstack(
-            [
-                sub_sc_matrix[:2],
-                sc_matrix[-1],
-            ]
+        inplane_strain_transformation = (
+            np.linalg.inv(sc_matrix[:2, :2]) @ sub_sc_matrix[:2, :2]
         )
+        inplane_strained_matrix = (
+            sc_matrix[:, :2] @ inplane_strain_transformation
+        )
+
+        strained_matrix = np.c_[inplane_strained_matrix, sc_matrix[:, -1]]
 
         init_volume = supercell_slab.volume
         strain_volume = np.abs(np.linalg.det(strained_matrix))
         scale_factor = init_volume / strain_volume
 
         # Maintain constant volume
-        strained_matrix[-1] *= scale_factor
-        strain_matrix = np.linalg.inv(sc_matrix) @ strained_matrix
-
-        strained_film = Structure(
-            lattice=Lattice(strained_matrix),
-            species=supercell_slab.species,
-            coords=supercell_slab.frac_coords,
-            coords_are_cartesian=False,
-            to_unit_cell=True,
-            site_properties=supercell_slab.site_properties,
+        strained_matrix[-1, -1] *= scale_factor
+        strain_transformation = np.linalg.inv(sc_matrix) @ strained_matrix
+        strained_film = utils.apply_strain_matrix(
+            structure=supercell_slab,
+            strain_matrix=strain_transformation,
         )
 
         sub_non_orth_c_vec = self._substrate_supercell.lattice.matrix[-1]
@@ -2222,7 +2219,7 @@ class Interface:
             site_properties=strained_film.site_properties,
         )
 
-        return oriented_film, strain_matrix
+        return oriented_film, strain_transformation
 
     # def _prepare_film_old(self) -> Structure:
     #     supercell_slab = self._film_supercell
