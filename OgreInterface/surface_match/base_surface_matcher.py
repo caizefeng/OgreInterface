@@ -25,6 +25,46 @@ from pyswarms.single.global_best import GlobalBestPSO
 from sko.PSO import PSO
 from sko.tools import set_run_mode
 import os
+from tqdm import tqdm
+
+
+def _tqdm_run(self, max_iter=None, precision=None, N=20):
+    """
+    precision: None or float
+        If precision is None, it will run the number of max_iter steps
+        If precision is a float, the loop will stop if continuous N difference between pbest less than precision
+    N: int
+    """
+    self.max_iter = max_iter or self.max_iter
+    c = 0
+    for iter_num in tqdm(range(self.max_iter)):
+        self.update_V()
+        self.recorder()
+        self.update_X()
+        self.cal_y()
+        self.update_pbest()
+        self.update_gbest()
+        if precision is not None:
+            tor_iter = np.amax(self.pbest_y) - np.amin(self.pbest_y)
+            if tor_iter < precision:
+                c = c + 1
+                if c > N:
+                    break
+            else:
+                c = 0
+        if self.verbose:
+            print(
+                "Iter: {}, Best fit: {} at {}".format(
+                    iter_num, self.gbest_y, self.gbest_x
+                )
+            )
+
+        self.gbest_y_hist.append(self.gbest_y)
+    self.best_x, self.best_y = self.gbest_x, self.gbest_y
+    return self.best_x, self.best_y
+
+
+PSO.run = _tqdm_run
 
 
 class BaseSurfaceMatcher:
@@ -161,6 +201,7 @@ class BaseSurfaceMatcher:
 
     def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 15):
         set_run_mode(func, mode="vectorization")
+        print("Running 3D Surface Matching with Particle Swarm Optimization:")
         optimizer = PSO(
             func=func,
             pop=n_particles,
