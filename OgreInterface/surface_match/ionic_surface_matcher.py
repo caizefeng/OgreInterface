@@ -14,6 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RectBivariateSpline, CubicSpline
 from itertools import groupby, combinations_with_replacement, product
+from matscipy.neighbours import neighbour_list
 
 # import torch
 import time
@@ -259,14 +260,32 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
     def _get_charges(self):
         sub = self.interface.substrate.bulk_structure
         film = self.interface.film.bulk_structure
-        sub_oxidation_state = sub.composition.oxi_state_guesses()[0]
-        film_oxidation_state = film.composition.oxi_state_guesses()[0]
 
-        sub_oxidation_state.update(film_oxidation_state)
+        oxidation_states = {}
 
-        return sub_oxidation_state
+        sub_guess = sub.composition.oxi_state_guesses()
 
-    def _get_neighborhood_info(self, struc, charge_dict):
+        if len(sub_guess) > 0:
+            oxidation_states.update(sub_guess[0])
+        else:
+            unique_atomic_numbers = np.unique(sub.atomic_numbers)
+            oxidation_states.update(
+                {chemical_symbols[n]: 0 for n in unique_atomic_numbers}
+            )
+
+        film_guess = film.composition.oxi_state_guesses()
+
+        if len(film_guess) > 0:
+            oxidation_states.update(film_guess[0])
+        else:
+            unique_atomic_numbers = np.unique(film.atomic_numbers)
+            oxidation_states.update(
+                {chemical_symbols[n]: 0 for n in unique_atomic_numbers}
+            )
+
+        return oxidation_states
+
+    def _get_neighborhood_info_old(self, struc, charge_dict):
         struc.add_oxidation_state_by_element(charge_dict)
         Zs = np.unique(struc.atomic_numbers)
         combos = combinations_with_replacement(Zs, 2)
@@ -275,11 +294,13 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         neighbor_list = []
         ionic_radii_dict = {Z: [] for Z in Zs}
 
-        cnn = CrystalNN(search_cutoff=7.0, cation_anion=True)
+        cnn = CrystalNN(search_cutoff=7.0, cation_anion=False)
         for i, site in enumerate(struc.sites):
             info_dict = cnn.get_nn_info(struc, i)
             for neighbor in info_dict:
-                dist = site.distance(neighbor["site"])
+                dist = site.distance(
+                    neighbor["site"], jimage=neighbor["image"]
+                )
                 species = tuple(
                     sorted([site.specie.Z, neighbor["site"].specie.Z])
                 )
@@ -328,31 +349,35 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return neighbor_dict, mean_radius_dict
 
-    def _get_neighborhood_info_en(self, struc, charge_dict):
-        struc.add_oxidation_state_by_element(charge_dict)
-        Zs = np.unique(struc.atomic_numbers)
-        combos = combinations_with_replacement(Zs, 2)
+    def _get_neighborhood_info(self, struc, charge_dict):
+        atoms = AseAtomsAdaptor().get_atoms(struc)
+        atomic_numbers = atoms.get_atomic_numbers()
+        unique_atomic_numbers = np.unique(atomic_numbers)
+        combos = combinations_with_replacement(unique_atomic_numbers, 2)
         neighbor_dict = {c: None for c in combos}
 
         neighbor_list = []
-        ionic_radii_dict = {Z: [] for Z in Zs}
+        ionic_radii_dict = {Z: [] for Z in unique_atomic_numbers}
 
-        cnn = CrystalNN(search_cutoff=7.0, cation_anion=True)
-        for i, site in enumerate(struc.sites):
-            info_dict = cnn.get_nn_info(struc, i)
-            for neighbor in info_dict:
-                dist = site.distance(neighbor["site"])
-                species = tuple(
-                    sorted([site.specie.Z, neighbor["site"].specie.Z])
-                )
-                neighbor_list.append([species, dist])
+        idx_i, idx_j, dists = neighbour_list(
+            "ijd",
+            atoms=AseAtomsAdaptor().get_atoms(struc),
+            cutoff=7.0,
+        )
 
-        sorted_neighbor_list = sorted(neighbor_list, key=lambda x: x[0])
-        groups = groupby(sorted_neighbor_list, key=lambda x: x[0])
+        neighbor_list = [
+            (tuple(sorted([atomic_numbers[i], atomic_numbers[j]])), d)
+            for i, j, d in zip(idx_i, idx_j, dists)
+        ]
 
-        for group in groups:
-            nn = list(zip(*group[1]))[1]
-            neighbor_dict[group[0]] = np.min(nn)
+        neighbor_list.sort(key=lambda x: (x[0], x[1]))
+        neighbor_groups = groupby(neighbor_list, key=lambda x: x[0])
+
+        neighbor_dict = {}
+
+        for k, group in neighbor_groups:
+            min_dist = min([g[1] for g in group])
+            neighbor_dict[k] = min_dist
 
         for n, d in neighbor_dict.items():
             s1 = chemical_symbols[n[0]]
@@ -360,17 +385,22 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             c1 = charge_dict[s1]
             c2 = charge_dict[s2]
 
-            e1 = Element(s1).X ** 2
-            e2 = Element(s2).X ** 2
-            # d1 = covalent_radii[n[0]]
-            # d2 = covalent_radii[n[1]]
-            d1 = Element(s1).atomic_radius
-            d2 = Element(s2).atomic_radius
+            try:
+                d1 = float(Element(s1).ionic_radii[c1])
+            except KeyError:
+                print(
+                    f"No ionic radius available for {s1}, using the atomic radius instead"
+                )
+                d1 = float(Element(s1).atomic_radius)
 
-            eneg_frac = e1 / (e1 + e2)
-            print(s1, s2, eneg_frac)
-            d1 *= 0.5 + eneg_frac
-            d2 *= 0.5 + (1 - eneg_frac)
+            try:
+                d2 = float(Element(s2).ionic_radii[c2])
+            except KeyError:
+                print(
+                    f"No ionic radius available for {s2}, using the atomic radius instead"
+                )
+                d2 = float(Element(s2).atomic_radius)
+
             radius_frac = d1 / (d1 + d2)
 
             if d is None:
@@ -381,126 +411,17 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
                 ionic_radii_dict[n[0]].append(r0_1)
                 ionic_radii_dict[n[1]].append(r0_2)
 
-        mean_radius_dict = {k: np.mean(v) for k, v in ionic_radii_dict.items()}
+        mean_radius_dict = {k: np.min(v) for k, v in ionic_radii_dict.items()}
 
-        return neighbor_dict, mean_radius_dict
+        return mean_radius_dict
 
     def _get_r0s(self, sub, film, charge_dict):
-        sub_dict, sub_radii_dict = self._get_neighborhood_info(
-            sub, charge_dict
-        )
-        film_dict, film_radii_dict = self._get_neighborhood_info(
-            film, charge_dict
-        )
-
-        # print("Old:")
-        # print(sub_radii_dict)
-        # print(film_radii_dict)
-        # print()
-
-        # _, sub_radii_dict = self._get_neighborhood_info_en(sub, charge_dict)
-        # _, film_radii_dict = self._get_neighborhood_info_en(film, charge_dict)
-
-        # print("New:")
-        # print(sub_radii_dict)
-        # print(film_radii_dict)
-        # print()
-
-        # print(sub_radii_dict)
-        # print(sub_radii_dict_en)
-
-        # print(film_radii_dict)
-        # print(film_radii_dict_en)
+        sub_radii_dict = self._get_neighborhood_info(sub, self.charge_dict)
+        film_radii_dict = self._get_neighborhood_info(film, self.charge_dict)
 
         r0_dict = {"film": film_radii_dict, "sub": sub_radii_dict}
 
         return r0_dict
-
-        # interface_atomic_numbers = np.unique(
-        #     np.concatenate([sub.atomic_numbers, film.atomic_numbers])
-        # )
-
-        # ionic_radius_dict = {}
-
-        # for n in interface_atomic_numbers:
-        #     element = Element(chemical_symbols[n])
-
-        #     try:
-        #         d = float(
-        #             element.ionic_radii[charge_dict[chemical_symbols[n]]]
-        #         )
-
-        #     except KeyError:
-        #         print(
-        #             f"No ionic radius available for {chemical_symbols[n]}, using the atomic radius instead"
-        #         )
-        #         d = float(element.atomic_radius)
-
-        #     ionic_radius_dict[n] = d
-
-        # interface_combos = product(interface_atomic_numbers, repeat=2)
-        # for key in interface_combos:
-        #     i = key[0]
-        #     j = key[1]
-
-        #     has_sub_i = True
-        #     has_sub_j = True
-
-        #     has_film_i = True
-        #     has_film_j = True
-
-        #     if i in sub_radii_dict:
-        #         sub_r0_i = sub_radii_dict[i]
-        #     else:
-        #         sub_r0_i = ionic_radius_dict[i]
-        #         has_sub_i = False
-
-        #     if j in sub_radii_dict:
-        #         sub_r0_j = sub_radii_dict[j]
-        #     else:
-        #         sub_r0_j = ionic_radius_dict[j]
-        #         has_sub_j = False
-
-        #     if i in film_radii_dict:
-        #         film_r0_i = film_radii_dict[i]
-        #     else:
-        #         film_r0_i = ionic_radius_dict[i]
-        #         has_film_i = False
-
-        #     if j in film_radii_dict:
-        #         film_r0_j = film_radii_dict[j]
-        #     else:
-        #         film_r0_j = ionic_radius_dict[j]
-        #         has_film_j = False
-
-        #     iface_i = ((sub_r0_i * has_sub_i) + (film_r0_i * has_film_i)) / (
-        #         has_sub_i + has_film_i
-        #     )
-        #     iface_j = ((sub_r0_j * has_sub_j) + (film_r0_j * has_film_j)) / (
-        #         has_sub_j + has_film_j
-        #     )
-
-        #     r0_array[0, i, j] = film_r0_i + film_r0_j
-        #     r0_array[1, i, j] = iface_i + iface_j
-        #     r0_array[2, i, j] = sub_r0_i + sub_r0_j
-        #     r0_array[0, j, i] = film_r0_i + film_r0_j
-        #     r0_array[1, j, i] = iface_i + iface_j
-        #     r0_array[2, j, i] = sub_r0_i + sub_r0_j
-
-        # return r0_array.astype(np.float32)
-
-    # def bo_function(self, a, b, z):
-    #     frac_ab = np.array([a, b]).reshape(1, 2)
-    #     cart_xy = self.get_cart_xy_shifts(frac_ab)
-    #     z_shift = z - self.d_interface
-    #     shift = np.c_[cart_xy, z_shift * np.ones(len(cart_xy))]
-    #     batch_inputs = create_batch(
-    #         inputs=self.iface_inputs,
-    #         batch_size=1,
-    #     )
-    #     E, _, _, _, _ = self._calculate(inputs=batch_inputs, shifts=shift)
-
-    #     return -E[0]
 
     def pso_function(self, x):
         cart_xy = self.get_cart_xy_shifts(x[:, :2])

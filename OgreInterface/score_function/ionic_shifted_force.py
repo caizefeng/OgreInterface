@@ -44,6 +44,7 @@ class IonicShiftedForcePotential:
         ns = inputs["born_ns"]
         r0s = inputs["r0s"]
         idx_m = inputs["idx_m"]
+        e_negs = inputs["e_negs"]
 
         idx_i_all = inputs["idx_i"]
         idx_j_all = inputs["idx_j"]
@@ -61,7 +62,10 @@ class IonicShiftedForcePotential:
 
         r0_ij = r0s[idx_i] + r0s[idx_j]
         n_ij = (ns[idx_i] + ns[idx_j]) / 2
-        q_ij = q[idx_i] * q[idx_j]
+        q_ij = (q[idx_i] * q[idx_j]).astype(np.float32)
+        e_diff_ij = 0.5 + (np.abs(e_negs[idx_i] - e_negs[idx_j]) / (2 * 3.19))
+        zero_charge_mask = q_ij == 0
+        q_ij[zero_charge_mask] -= e_diff_ij[zero_charge_mask]
 
         B_ij = -self._calc_B(r0_ij=r0_ij, n_ij=n_ij, q_ij=q_ij)
 
