@@ -22,6 +22,8 @@ from ase.data import chemical_symbols
 import itertools
 import time
 from pyswarms.single.global_best import GlobalBestPSO
+from sko.PSO import PSO
+from sko.tools import set_run_mode
 import os
 
 
@@ -141,19 +143,52 @@ class BaseSurfaceMatcher:
         else:
             raise "_add_shifts_to_batch should only be used on interfaces that have the is_film property"
 
+    # def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 15):
+    #     bounds = (
+    #         np.array([0.0, 0.0, z_bounds[0]]),
+    #         np.array([1.0, 1.0, z_bounds[1]]),
+    #     )
+    #     options = {"c1": 0.5, "c2": 0.3, "w": 0.9}
+    #     optimizer = GlobalBestPSO(
+    #         n_particles=n_particles,
+    #         dimensions=3,
+    #         options=options,
+    #         bounds=bounds,
+    #     )
+    #     cost, pos = optimizer.optimize(func, iters=max_iters)
+
+    #     return cost, pos
+
     def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 15):
-        bounds = (
-            np.array([0.0, 0.0, z_bounds[0]]),
-            np.array([1.0, 1.0, z_bounds[1]]),
+        set_run_mode(func, mode="vectorization")
+        optimizer = PSO(
+            func=func,
+            pop=n_particles,
+            max_iter=max_iters,
+            lb=[0.0, 0.0, z_bounds[0]],
+            ub=[1.0, 1.0, z_bounds[1]],
+            w=0.8,
+            c1=0.5,
+            c2=0.5,
+            verbose=False,
+            dim=3,
         )
-        options = {"c1": 0.5, "c2": 0.3, "w": 0.9}
-        optimizer = GlobalBestPSO(
-            n_particles=n_particles,
-            dimensions=3,
-            options=options,
-            bounds=bounds,
-        )
-        cost, pos = optimizer.optimize(func, iters=max_iters)
+        optimizer.run()
+        cost = optimizer.gbest_y
+        pos = optimizer.gbest_x
+
+        # bounds = (
+        #     np.array([0.0, 0.0, z_bounds[0]]),
+        #     np.array([1.0, 1.0, z_bounds[1]]),
+        # )
+        # options = {"c1": 0.5, "c2": 0.3, "w": 0.9}
+        # optimizer = GlobalBestPSO(
+        #     n_particles=n_particles,
+        #     dimensions=3,
+        #     options=options,
+        #     bounds=bounds,
+        # )
+        # cost, pos = optimizer.optimize(func, iters=max_iters)
 
         return cost, pos
 
