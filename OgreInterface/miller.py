@@ -1,12 +1,9 @@
-from OgreInterface.generate import SurfaceGenerator
-from OgreInterface.lattice_match import ZurMcGill
-from OgreInterface import utils
+from itertools import product
+from typing import Union, Optional
 
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.core.surface import get_symmetrically_distinct_miller_indices
-
 from ase import Atoms
 import numpy as np
 
@@ -15,10 +12,9 @@ from matplotlib.collections import PatchCollection
 from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
-from functools import reduce
-from itertools import product
-
-from typing import Union
+from OgreInterface.generate import SurfaceGenerator
+from OgreInterface.lattice_match import ZurMcGill
+from OgreInterface import utils
 
 
 class MillerSearch(object):
@@ -68,9 +64,8 @@ class MillerSearch(object):
         max_substrate_index: int = 1,
         max_film_index: int = 1,
         max_area_mismatch: float = 0.01,
-        max_angle_strain: float = 0.01,
-        max_linear_strain: float = 0.01,
-        max_area: float = 500.0,
+        max_strain: float = 0.01,
+        max_area: Optional[float] = None,
         refine_structure: bool = True,
         suppress_warnings: bool = False,
     ) -> None:
@@ -89,8 +84,7 @@ class MillerSearch(object):
         self.max_film_index = max_film_index
         self.max_substrate_index = max_substrate_index
         self.max_area_mismatch = max_area_mismatch
-        self.max_angle_strain = max_angle_strain
-        self.max_linear_strain = max_linear_strain
+        self.max_strain = max_strain
         self.max_area = max_area
         self.substrate_inds = self._get_unique_miller_indices(
             self.substrate, self.max_substrate_index
@@ -179,50 +173,6 @@ class MillerSearch(object):
             init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
 
             return init_structure, init_atoms
-
-    # def _get_bulk(self, atoms_or_struc):
-    #     if type(atoms_or_struc) == Atoms:
-    #         init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
-    #     elif type(atoms_or_struc) == Structure:
-    #         init_structure = atoms_or_struc
-    #     else:
-    #         raise TypeError(
-    #             f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
-    #         )
-
-    #     if self.convert_to_conventional:
-    #         sg = SpacegroupAnalyzer(init_structure)
-    #         conventional_structure = sg.get_conventional_standard_structure()
-    #         prim_structure = sg.get_primitive_standard_structure()
-
-    #         return (conventional_structure, prim_structure)
-    #     else:
-    #         prim_structure = init_structure.get_primitive_structure()
-
-    #         return init_structure, prim_structure
-
-    # def _get_bulk(self, atoms_or_struc):
-    #     if type(atoms_or_struc) == Atoms:
-    #         init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
-    #     elif type(atoms_or_struc) == Structure:
-    #         init_structure = atoms_or_struc
-    #     else:
-    #         raise TypeError(
-    #             f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
-    #         )
-
-    #     if self.convert_to_conventional:
-    #         sg = SpacegroupAnalyzer(init_structure)
-    #         conventional_structure = sg.get_conventional_standard_structure()
-    #         conventional_atoms = AseAtomsAdaptor.get_atoms(
-    #             conventional_structure
-    #         )
-
-    #         return conventional_structure, conventional_atoms
-    #     else:
-    #         init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
-
-    #         return init_structure, init_atoms
 
     def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
         t = min(abs(a), abs(b))
@@ -374,8 +324,7 @@ class MillerSearch(object):
                     film_basis=film[2],
                     substrate_basis=substrate[2],
                     max_area=self.max_area,
-                    max_linear_strain=self.max_linear_strain,
-                    max_angle_strain=self.max_angle_strain,
+                    max_strain=self.max_strain,
                     max_area_mismatch=self.max_area_mismatch,
                 )
                 matches = zm.run()
@@ -383,8 +332,8 @@ class MillerSearch(object):
                 if len(matches) > 0:
                     min_area_match = matches[0]
                     area = min_area_match.area
-                    strain = min_area_match.linear_strain
-                    misfits[i, j] = np.abs(strain).max()
+                    strain = min_area_match.strain
+                    misfits[i, j] = strain
                     areas[i, j] = area / np.sqrt(substrate[1] * film[1])
 
         self.misfits = np.round(misfits.T, 8)
@@ -392,7 +341,7 @@ class MillerSearch(object):
 
     def plot_misfits(
         self,
-        cmap: str = "magma",
+        cmap: str = "coolwarm",
         dpi: int = 400,
         output: str = "misfit_plot.png",
         fontsize: float = 12.0,
@@ -457,16 +406,27 @@ class MillerSearch(object):
         )
 
         if film_label is None:
-            film_label = self.film.composition.reduced_formula
+            film_label = utils.get_latex_formula(
+                self.film.composition.reduced_formula
+            )
 
         ax.set_ylabel(film_label + " Miller Index", fontsize=fontsize)
 
         if substrate_label is None:
-            substrate_label = self.substrate.composition.reduced_formula
+            substrate_label = utils.get_latex_formula(
+                self.substrate.composition.reduced_formula
+            )
 
         ax.set_xlabel(substrate_label + " Miller Index", fontsize=fontsize)
 
-        R = 0.85 * s / np.nanmax(s) / 2
+        if not np.isnan(s).all():
+            R = 0.85 * s / np.nanmax(s) / 2
+        else:
+            print(
+                "WARNING: No matches were found with the current settings. Try increasing max_area or max_strain"
+            )
+            R = s
+
         circles = [
             plt.Circle((i, j), radius=r, edgecolor="black", lw=3)
             for r, i, j in zip(R.flat, x.flat, y.flat)
@@ -476,8 +436,8 @@ class MillerSearch(object):
             array=c.flatten(),
             cmap=cmap,
             norm=Normalize(
-                vmin=np.max([np.nanmin(c) - 0.01 * np.nanmin(c), 0]),
-                vmax=np.nanmax(c) + 0.01 * np.nanmax(c),
+                vmin=0.0,
+                vmax=100 * self.max_strain,
             ),
             edgecolor="black",
             linewidth=1,
@@ -497,7 +457,7 @@ class MillerSearch(object):
         ax.grid(which="minor", linestyle=":", linewidth=0.75)
 
         cbar = fig.colorbar(col, cax=cax)
-        cbar.set_label("Misfit Percentage", fontsize=fontsize)
+        cbar.set_label("Strain (%)", fontsize=fontsize)
         cbar.ax.tick_params(labelsize=fontsize)
         cbar.ax.ticklabel_format(
             style="sci", scilimits=(-3, 3), useMathText=True

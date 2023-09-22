@@ -1,8 +1,11 @@
 """
 This module will be used to construct the surfaces and interfaces used in this package.
 """
-from OgreInterface import utils
-from OgreInterface.lattice_match import OgreMatch
+from typing import Dict, Union, Iterable, List, Tuple, TypeVar
+from itertools import combinations, groupby
+from copy import deepcopy
+from functools import reduce
+import warnings
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
@@ -12,18 +15,13 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SymmOp, SpacegroupAnalyzer
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
 from pymatgen.analysis.local_env import CrystalNN, BrunnerNN_real
-
-from typing import Dict, Union, Iterable, List, Tuple, TypeVar
-import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon, Circle, Shadow
-from matplotlib.colors import to_rgb, to_rgba
-from itertools import combinations, groupby
 import numpy as np
-import copy
-from copy import deepcopy
-from functools import reduce
 from ase import Atoms
-import warnings
+
+from OgreInterface import utils
+from OgreInterface.lattice_match import OgreMatch
+from OgreInterface.plotting_tools import plot_match
+
 
 # suppress warning from CrystallNN when ionic radii are not found.
 warnings.filterwarnings("ignore", module=r"pymatgen.analysis.local_env")
@@ -1074,12 +1072,14 @@ class Interface:
         interfacial_distance: float,
         vacuum: float,
         center: bool = True,
+        substrate_strain_fraction: float = 0.0,
     ) -> None:
         self.center = center
         self.substrate = substrate
         self.film = film
         self.match = match
         self.vacuum = vacuum
+        self._substrate_strain_fraction = substrate_strain_fraction
         (
             self._substrate_supercell,
             self._substrate_obs_supercell,
@@ -1092,16 +1092,24 @@ class Interface:
             self._film_supercell_uvw,
             self._film_supercell_scale_factors,
         ) = self._create_supercell(substrate=False)
+
         self._substrate_a_to_i = self._orient_supercell(
-            supercell=self._substrate_supercell
+            supercell=self._substrate_supercell,
+            substrate=True,
         )
         self._film_a_to_i = self._orient_supercell(
-            supercell=self._film_supercell
+            supercell=self._film_supercell,
+            substrate=False,
         )
 
+        self._avg_sc_inplane_lattice = self._get_average_inplane_lattice()
+
         self.interfacial_distance = interfacial_distance
-        self._strained_sub = self._substrate_supercell
-        self._strained_film, self._strain_matrix = self._prepare_film()
+        (
+            self._strained_sub,
+            self._substrate_strain_matrix,
+        ) = self._prepare_substrate()
+        self._strained_film, self._film_strain_matrix = self._prepare_film()
 
         (
             self._M_matrix,
@@ -1122,6 +1130,16 @@ class Interface:
         self._b_shift = 0.0
         self.bottom_layer_dist = self.substrate.bottom_layer_dist
         self.top_layer_dist = self.film.top_layer_dist
+
+    def _get_average_inplane_lattice(self):
+        film_lattice = self._film_supercell.lattice.matrix[:2]
+        substrate_lattice = self._substrate_supercell.lattice.matrix[:2]
+
+        avg_lattice = (
+            (1 - self._substrate_strain_fraction) * film_lattice
+        ) + (self._substrate_strain_fraction * substrate_lattice)
+
+        return avg_lattice
 
     @property
     def inplane_vectors(self) -> np.ndarray:
@@ -1150,7 +1168,11 @@ class Interface:
     @property
     def substrate_oriented_bulk_supercell(self) -> Structure:
         if self._substrate_obs_supercell is not None:
-            return self._substrate_obs_supercell
+            obs_supercell = utils.apply_strain_matrix(
+                structure=self._substrate_obs_supercell,
+                strain_matrix=self._substrate_strain_matrix,
+            )
+            return obs_supercell
         else:
             raise "substrate_oriented_bulk_supercell is not applicable when an Interface is used as the substrate"
 
@@ -1159,11 +1181,33 @@ class Interface:
         if self._film_obs_supercell is not None:
             obs_supercell = utils.apply_strain_matrix(
                 structure=self._film_obs_supercell,
-                strain_matrix=self._strain_matrix,
+                strain_matrix=self._film_strain_matrix,
             )
             return obs_supercell
         else:
-            raise "substrate_oriented_bulk_supercell is not applicable when an Interface is used as the substrate"
+            raise "film_oriented_bulk_supercell is not applicable when an Interface is used as the film"
+
+    @property
+    def substrate_oriented_bulk_structure(self) -> Structure:
+        if type(self.substrate) == Surface:
+            obs_structure = utils.apply_strain_matrix(
+                structure=self.substrate.oriented_bulk_structure,
+                strain_matrix=self._substrate_strain_matrix,
+            )
+            return obs_structure
+        else:
+            raise "substrate_oriented_bulk_structure is not applicable when an Interface is used as the substrate"
+
+    @property
+    def film_oriented_bulk_structure(self) -> Structure:
+        if type(self.film) == Surface:
+            obs_structure = utils.apply_strain_matrix(
+                structure=self.film.oriented_bulk_structure,
+                strain_matrix=self._film_strain_matrix,
+            )
+            return obs_structure
+        else:
+            raise "film_oriented_bulk_structure is not applicable when an Interface is used as the film"
 
     @property
     def c_projection(self) -> float:
@@ -1570,12 +1614,7 @@ class Interface:
             + f"({match_a_film} || {match_a_sub})",
             "Epitaxial Match Along \\vec{b} (film || sub): "
             + f"({match_b_film} || {match_b_sub})",
-            "Strain Along \\vec{a} (%): "
-            + f"{100*self.match.linear_strain[0]:.3f}",
-            "Strain Along \\vec{b} (%): "
-            + f"{100*self.match.linear_strain[1]:.3f}",
-            "In-plane Angle Mismatch (%): "
-            + f"{100*self.match.angle_strain:.3f}",
+            "Strain (%): " + f"{100*self.match.strain:.3f}",
             "Cross Section Area (Ang^2): " + f"{self.area:.3f}",
         ]
         return_str = "\n".join(return_info)
@@ -2138,13 +2177,24 @@ class Interface:
 
         return supercell, obs_supercell, uvw_supercell, scale_factors
 
-    def _orient_supercell(self, supercell: Structure) -> np.ndarray:
-        matrix = deepcopy(supercell.lattice.matrix)
+    def _orient_supercell(
+        self, supercell: Structure, substrate: bool
+    ) -> np.ndarray:
+        if substrate:
+            a_to_i = self.match.substrate_align_transform.T
+        else:
+            a_to_i = self.match.film_align_transform.T
 
-        a_norm = matrix[0] / np.linalg.norm(matrix[0])
-        a_to_i = np.array(
-            [[a_norm[0], -a_norm[1], 0], [a_norm[1], a_norm[0], 0], [0, 0, 1]]
-        ).T
+        # print(np.round(a_to_i, 3))
+
+        # matrix = deepcopy(supercell.lattice.matrix)
+
+        # a_norm = matrix[0] / np.linalg.norm(matrix[0])
+        # a_to_i = np.array(
+        #     [[a_norm[0], -a_norm[1], 0], [a_norm[1], a_norm[0], 0], [0, 0, 1]]
+        # ).T
+
+        # print(np.round(a_to_i, 3))
 
         a_to_i_operation = SymmOp.from_rotation_and_translation(
             a_to_i, translation_vec=np.zeros(3)
@@ -2157,24 +2207,10 @@ class Interface:
 
         return a_to_i
 
-    def _prepare_substrate(self) -> Tuple[Structure, np.ndarray, np.ndarray]:
-        matrix = self.match.substrate_sl_transform
-        supercell_slab = self.substrate._non_orthogonal_slab_structure.copy()
-        supercell_slab.make_supercell(scaling_matrix=matrix)
-
-        uvw_supercell = matrix @ self.substrate.uvw_basis
-        scale_factors = []
-        for i, b in enumerate(uvw_supercell):
-            scale = np.abs(reduce(utils._float_gcd, b))
-            uvw_supercell[i] = uvw_supercell[i] / scale
-            scale_factors.append(scale)
-
-        return supercell_slab, uvw_supercell, scale_factors
-
     def _prepare_film(self) -> Structure:
         supercell_slab = self._film_supercell
         sc_matrix = supercell_slab.lattice.matrix
-        sub_sc_matrix = self._substrate_supercell.lattice.matrix
+        sub_sc_matrix = self._strained_sub.lattice.matrix
 
         inplane_strain_transformation = (
             np.linalg.inv(sc_matrix[:2, :2]) @ sub_sc_matrix[:2, :2]
@@ -2191,13 +2227,15 @@ class Interface:
 
         # Maintain constant volume
         strained_matrix[-1, -1] *= scale_factor
-        strain_transformation = np.linalg.inv(sc_matrix) @ strained_matrix
+        const_volume_strain_transformation = (
+            np.linalg.inv(sc_matrix) @ strained_matrix
+        )
         strained_film = utils.apply_strain_matrix(
             structure=supercell_slab,
-            strain_matrix=strain_transformation,
+            strain_matrix=const_volume_strain_transformation,
         )
 
-        sub_non_orth_c_vec = self._substrate_supercell.lattice.matrix[-1]
+        sub_non_orth_c_vec = self._strained_sub.lattice.matrix[-1]
         sub_non_orth_c_norm = sub_non_orth_c_vec / np.linalg.norm(
             sub_non_orth_c_vec
         )
@@ -2219,171 +2257,37 @@ class Interface:
             site_properties=strained_film.site_properties,
         )
 
-        return oriented_film, strain_transformation
+        return oriented_film, const_volume_strain_transformation
 
-    # def _prepare_film_old(self) -> Structure:
-    #     supercell_slab = self._film_supercell
-    #     sc_matrix = supercell_slab.lattice.matrix
-    #     sub_sc_matrix = self._substrate_supercell.lattice.matrix
+    def _prepare_substrate(self) -> Structure:
+        supercell_slab = self._substrate_supercell
+        sc_matrix = supercell_slab.lattice.matrix
+        avg_sc_matrix = self._avg_sc_inplane_lattice
 
-    #     sub_non_orth_c_vec = self._substrate_supercell.lattice.matrix[-1]
-    #     sub_non_orth_c_norm = sub_non_orth_c_vec / np.linalg.norm(
-    #         sub_non_orth_c_vec
-    #     )
+        inplane_strain_transformation = (
+            np.linalg.inv(sc_matrix[:2, :2]) @ avg_sc_matrix[:2, :2]
+        )
+        inplane_strained_matrix = (
+            sc_matrix[:, :2] @ inplane_strain_transformation
+        )
 
-    #     norm = self.film.surface_normal
-    #     proj = np.dot(norm, sub_non_orth_c_norm)
-    #     scale = supercell_slab.lattice.c / proj
+        strained_matrix = np.c_[inplane_strained_matrix, sc_matrix[:, -1]]
 
-    #     new_c_matrix = np.vstack([sc_matrix[:2], sub_non_orth_c_norm * scale])
+        init_volume = supercell_slab.volume
+        strain_volume = np.abs(np.linalg.det(strained_matrix))
+        scale_factor = init_volume / strain_volume
 
-    #     oriented_film = Structure(
-    #         lattice=Lattice(new_c_matrix),
-    #         species=supercell_slab.species,
-    #         coords=supercell_slab.cart_coords,
-    #         coords_are_cartesian=True,
-    #         to_unit_cell=True,
-    #         site_properties=supercell_slab.site_properties,
-    #     )
+        # Maintain constant volume
+        strained_matrix[-1, -1] *= scale_factor
+        const_volume_strain_transformation = (
+            np.linalg.inv(sc_matrix) @ strained_matrix
+        )
+        strained_substrate = utils.apply_strain_matrix(
+            structure=supercell_slab,
+            strain_matrix=const_volume_strain_transformation,
+        )
 
-    #     strained_matrix = np.vstack(
-    #         [
-    #             sub_sc_matrix[:2],
-    #             oriented_film.lattice.matrix[-1],
-    #         ]
-    #     )
-
-    #     init_volume = oriented_film.volume
-    #     strain_volume = np.abs(np.linalg.det(strained_matrix))
-    #     scale_factor = init_volume / strain_volume
-
-    #     # Maintain constant volume
-    #     strained_matrix[-1] *= scale_factor
-
-    #     strained_film = Structure(
-    #         lattice=Lattice(strained_matrix),
-    #         species=oriented_film.species,
-    #         coords=oriented_film.frac_coords,
-    #         coords_are_cartesian=False,
-    #         to_unit_cell=True,
-    #         site_properties=supercell_slab.site_properties,
-    #     )
-
-    #     return strained_film
-
-    # def _prepare_film_old(self) -> Tuple[Structure, np.ndarray, np.ndarray]:
-    #     matrix = self.match.film_sl_transform
-    #     supercell_slab = self.film._non_orthogonal_slab_structure.copy()
-    #     supercell_slab.make_supercell(scaling_matrix=matrix)
-
-    #     sc_matrix = supercell_slab.lattice.matrix
-    #     sub_non_orth_c_vec = (
-    #         self.substrate._non_orthogonal_slab_structure.lattice.matrix[-1]
-    #     )
-    #     sub_non_orth_c_norm = sub_non_orth_c_vec / np.linalg.norm(
-    #         sub_non_orth_c_vec
-    #     )
-
-    #     norm = self.film.surface_normal
-    #     proj = np.dot(norm, sub_non_orth_c_norm)
-    #     scale = self.film._orthogonal_slab_structure.lattice.c / proj
-
-    #     new_matrix = np.vstack([sc_matrix[:2], sub_non_orth_c_norm * scale])
-
-    #     oriented_supercell_slab = Structure(
-    #         lattice=Lattice(new_matrix),
-    #         species=supercell_slab.species,
-    #         coords=supercell_slab.cart_coords,
-    #         coords_are_cartesian=True,
-    #         to_unit_cell=True,
-    #         site_properties=supercell_slab.site_properties,
-    #     )
-
-    #     uvw_supercell = matrix @ self.film.uvw_basis
-    #     scale_factors = []
-    #     for i, b in enumerate(uvw_supercell):
-    #         scale = np.abs(reduce(utils._float_gcd, b))
-    #         uvw_supercell[i] = uvw_supercell[i] / scale
-    #         scale_factors.append(scale)
-
-    #     return oriented_supercell_slab, uvw_supercell, scale_factors
-
-    # def _strain_and_orient_film(self) -> Tuple[Structure, np.ndarray]:
-    #     sub_in_plane_vecs = self._substrate_supercell.lattice.matrix[:2]
-    #     film_out_of_plane = self._film_supercell.lattice.matrix[-1]
-    # film_inv_matrix = self._film_supercell.lattice.inv_matrix
-    # new_matrix = np.vstack([sub_in_plane_vecs, film_out_of_plane])
-    # transform = (film_inv_matrix @ new_matrix).T
-    #     print(transform)
-    # op = SymmOp.from_rotation_and_translation(
-    #     transform, translation_vec=np.zeros(3)
-    # )
-
-    # strained_film = deepcopy(self._film_supercell)
-    # strained_film.apply_operation(op)
-
-    #     return strained_film, transform
-
-    # def _strain_and_orient_film(self) -> Tuple[Structure, np.ndarray]:
-    #     sub_matrix = deepcopy(self._substrate_supercell.lattice.matrix)
-    #     film_matrix = deepcopy(self._film_supercell.lattice.matrix)
-
-    #     sub_a = sub_matrix[0] / np.linalg.norm(sub_matrix[0])
-    #     film_a = film_matrix[0] / np.linalg.norm(film_matrix[0])
-
-    #     normal = self.film.surface_normal
-
-    #     sub_b = np.cross(sub_a, normal)
-    #     sub_b /= np.linalg.norm(sub_b)
-
-    #     film_b = np.cross(film_a, normal)
-    #     film_b /= np.linalg.norm(film_b)
-
-    #     sub_ortho_basis = np.vstack(
-    #         [
-    #             sub_a,
-    #             sub_b,
-    #             normal,
-    #         ]
-    #     )
-
-    #     film_ortho_basis = np.vstack(
-    #         [
-    #             film_a,
-    #             film_b,
-    #             normal,
-    #         ]
-    #     )
-
-    #     rotation = (np.linalg.inv(film_ortho_basis) @ sub_ortho_basis).T
-
-    #     op = SymmOp.from_rotation_and_translation(
-    #         rotation, translation_vec=np.zeros(3)
-    #     )
-
-    #     rotated_film = deepcopy(self._film_supercell)
-    #     rotated_film.apply_operation(op)
-
-    #     old_matrix = np.vstack([film_matrix[:2], normal])
-    #     new_matrix = np.vstack([sub_matrix[:2], normal])
-    #     transform = (np.linalg.inv(old_matrix) @ new_matrix).T
-
-    #     # Poscar(self._film_supercell).write_file("POSCAR_film_init")
-
-    #     # strained_film = Structure(
-    #     #     lattice=Lattice(new_matrix),
-    #     #     species=self._film_supercell.species,
-    #     #     coords=self._film_supercell.frac_coords,
-    #     #     to_unit_cell=True,
-    #     #     coords_are_cartesian=False,
-    #     #     site_properties=self._film_supercell.site_properties,
-    #     # )
-    #     # Poscar(strained_film).write_file("POSCAR_str_film")
-
-    #     return (
-    #         rotated_film,
-    #         transform,
-    #     )
+        return strained_substrate, const_volume_strain_transformation
 
     def _stack_interface(
         self,
@@ -2910,7 +2814,11 @@ class Interface:
         if strain:
             film_struc = utils.apply_strain_matrix(
                 structure=film_struc,
-                strain_matrix=self._strain_matrix,
+                strain_matrix=self._film_strain_matrix,
+            )
+            sub_struc = utils.apply_strain_matrix(
+                structure=sub_struc,
+                strain_matrix=self._substrate_strain_matrix,
             )
 
         sub_matrix = sub_struc.lattice.matrix
@@ -2992,573 +2900,12 @@ class Interface:
 
         return sub_matrix, sub_images, film_matrix, film_images
 
-    # def plot_interface_bu(
-    #     self,
-    #     output: str = "interface_view.png",
-    #     strain: bool = True,
-    #     dpi: int = 400,
-    #     show_in_colab: bool = False,
-    #     # film_color: Union[str, list] = [0, 110 / 255, 144 / 255],
-    #     # substrate_color: Union[str, list] = [241 / 255, 143 / 255, 1 / 255],
-    #     film_color: Union[str, list] = "firebrick",
-    #     substrate_color: Union[str, list] = "blue",
-    #     film_alpha: float = 0.0,
-    #     substrate_alpha: float = 0.0,
-    #     film_linewidth: float = 2,
-    #     substrate_linewidth: float = 2,
-    # ) -> None:
-    #     """
-    #     This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
-
-    #     Args:
-    #         output: File path for the output image
-    #         strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
-    #             or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
-    #         dpi: dpi (dots per inch) of the output image.
-    #             Setting dpi=100 gives reasonably sized images when viewed in colab notebook
-    #         show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
-    #             if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
-    #     """
-    #     if type(film_color) == str:
-    #         film_rgb = to_rgb(film_color)
-    #     else:
-    #         film_rgb = tuple(film_color)
-
-    #     if type(substrate_color) == str:
-    #         sub_rgb = to_rgb(substrate_color)
-    #     else:
-    #         sub_rgb = tuple(substrate_color)
-
-    #     (
-    #         sub_matrix,
-    #         sub_images,
-    #         film_matrix,
-    #         film_images,
-    #     ) = self._get_oriented_cell_and_images(strain=strain)
-
-    #     interface_matrix = self._orthogonal_structure.lattice.matrix
-
-    #     coords = np.array(
-    #         [
-    #             [0, 0, 0],
-    #             [1, 0, 0],
-    #             [1, 1, 0],
-    #             [0, 1, 0],
-    #             [0, 0, 0],
-    #         ]
-    #     )
-
-    #     interface_coords = coords.dot(interface_matrix)
-
-    #     xlim = [0, 1]
-    #     ylim = [0, 1]
-
-    #     a = interface_matrix[0, :2]
-    #     b = interface_matrix[1, :2]
-    #     borders = np.vstack(
-    #         [
-    #             xlim[0] * a + ylim[0] * b,
-    #             xlim[1] * a + ylim[0] * b,
-    #             xlim[1] * a + ylim[1] * b,
-    #             xlim[0] * a + ylim[1] * b,
-    #             xlim[0] * a + ylim[0] * b,
-    #         ]
-    #     )
-    #     x_size = borders[:, 0].max() - borders[:, 0].min()
-    #     y_size = borders[:, 1].max() - borders[:, 1].min()
-    #     ratio = y_size / x_size
-
-    #     if ratio < 1:
-    #         figx = 5 / ratio
-    #         figy = 5
-    #     else:
-    #         figx = 5
-    #         figy = 5 * ratio
-
-    #     fig, ax = plt.subplots(
-    #         figsize=(figx, figy),
-    #         dpi=dpi,
-    #     )
-
-    #     for image in sub_images:
-    #         sub_coords = (coords + image).dot(sub_matrix)
-    #         poly = Polygon(
-    #             xy=sub_coords[:, :2],
-    #             closed=True,
-    #             facecolor=sub_rgb + (substrate_alpha,),
-    #             edgecolor=sub_rgb,
-    #             linewidth=substrate_linewidth,
-    #             zorder=0,
-    #         )
-    #         ax.add_patch(poly)
-
-    #     for image in film_images:
-    #         film_coords = (coords + image).dot(film_matrix)
-    #         poly = Polygon(
-    #             xy=film_coords[:, :2],
-    #             closed=True,
-    #             facecolor=film_rgb + (film_alpha,),
-    #             edgecolor=film_rgb,
-    #             linewidth=film_linewidth,
-    #             zorder=10,
-    #         )
-    #         ax.add_patch(poly)
-
-    #     grid_x = np.linspace(0, 1, 11)
-    #     grid_y = np.linspace(0, 1, 11)
-
-    #     X, Y = np.meshgrid(grid_x, grid_y)
-
-    #     iface_inv_matrix = self._orthogonal_structure.lattice.inv_matrix
-
-    #     frac_shifts = (
-    #         np.c_[X.ravel(), Y.ravel(), np.zeros(Y.shape).ravel()]
-    #         + film_images[0]
-    #     )
-    #     cart_shifts = frac_shifts.dot(film_matrix)
-    #     # frac_shifts = cart_shifts.dot(iface_inv_matrix)
-
-    #     ax.scatter(
-    #         cart_shifts[:, 0],
-    #         cart_shifts[:, 1],
-    #         c="black",
-    #     )
-
-    #     ax.plot(
-    #         interface_coords[:, 0],
-    #         interface_coords[:, 1],
-    #         color="black",
-    #         linewidth=4,
-    #         zorder=20,
-    #     )
-
-    #     ax.set_xlim(interface_coords[:, 0].min(), interface_coords[:, 0].max())
-    #     ax.set_ylim(interface_coords[:, 1].min(), interface_coords[:, 1].max())
-
-    #     ax.set_aspect("equal")
-    #     ax.axis("off")
-
-    #     fig.tight_layout()
-    #     fig.savefig(output, bbox_inches="tight")
-
-    #     if not show_in_colab:
-    #         plt.close()
-
-    def _add_arrows(
-        self, ax, matrix, arrow_color, color, size, labels, fontsize, linewidth
-    ):
-        norm_matrix = matrix / np.linalg.norm(matrix, axis=1)[:, None]
-        circ = Circle(
-            xy=[0, 0],
-            radius=1.5,
-            edgecolor=arrow_color,
-            facecolor=color,
-            linewidth=linewidth,
-        )
-        ax.add_patch(circ)
-
-        for i in range(2):
-            t = ax.text(
-                1.5 * norm_matrix[i, 0],
-                1.5 * norm_matrix[i, 1],
-                "$" + labels[i] + "$",
-                fontsize=fontsize,
-                ha="center",
-                va="center",
-                bbox=dict(boxstyle="round", fc="w", ec="black", alpha=1),
-            )
-            bb = t.get_bbox_patch()
-            ax.annotate(
-                "",
-                xytext=1.5 * norm_matrix[i, :2],
-                xy=(0, 0),
-                fontsize=fontsize,
-                ha="center",
-                va="center",
-                arrowprops=dict(
-                    arrowstyle="<-",
-                    color=arrow_color,
-                    shrinkA=5,
-                    shrinkB=0,
-                    patchA=bb,
-                    patchB=None,
-                    connectionstyle="arc3,rad=0",
-                    linewidth=linewidth,
-                ),
-            )
-
-            circ1 = Circle(
-                xy=[0, 0],
-                radius=0.075,
-                edgecolor=arrow_color,
-                facecolor=arrow_color,
-            )
-            ax.add_patch(circ1)
-
-    def _add_sc_labels(
-        self, ax, label, vector, fontsize, rotation, linewidth, height
-    ):
-        if rotation > 0:
-            theta = np.deg2rad(rotation)
-            rot = np.array(
-                [
-                    [np.cos(theta), -np.sin(theta)],
-                    [np.sin(theta), np.cos(theta)],
-                ]
-            )
-            shift = rot.dot(np.array([0, height]))
-        else:
-            shift = np.array([0, -height])
-
-        ax.text(
-            (0.5 * vector[0]) + shift[0],
-            (0.5 * vector[1]) + shift[1],
-            "$" + label + "$",
-            fontsize=fontsize,
-            ha="center",
-            va="center",
-            bbox=dict(boxstyle="round", fc="w", ec="w", alpha=1),
-            zorder=101,
-            rotation=rotation,
-        )
-        ax.annotate(
-            "",
-            xytext=vector[:2] + shift,
-            xy=shift,
-            fontsize=fontsize,
-            ha="center",
-            va="center",
-            arrowprops=dict(
-                arrowstyle="<-",
-                color="black",
-                shrinkA=0,
-                shrinkB=0,
-                patchA=None,
-                patchB=None,
-                connectionstyle="arc3,rad=0",
-                linewidth=linewidth,
-            ),
-            zorder=100,
-        )
-
-        return shift
-
-    def _setup_label_axis(self, ax):
-        ax.set_aspect("equal")
-        ax.tick_params(
-            left=False, labelleft=False, bottom=False, labelbottom=False
-        )
-        ax.axis("off")
-
-    def _get_miller_label(self, miller_index):
-        label = []
-        for i in miller_index:
-            if i < 0:
-                label.append("\\overline{" + f"{abs(int(i))}" + "}")
-            else:
-                label.append(f"{int(i)}")
-
-        return "[" + " ".join(label) + "]"
-
-    # def plot_interface_old2(
-    #     self,
-    #     output: str = "interface_view.png",
-    #     strain: bool = True,
-    #     dpi: int = 400,
-    #     show_in_colab: bool = False,
-    #     film_color: Union[str, list] = "firebrick",
-    #     substrate_color: Union[str, list] = "blue",
-    #     film_alpha: float = 0.05,
-    #     substrate_alpha: float = 0.05,
-    #     film_linewidth: float = 2,
-    #     substrate_linewidth: float = 2,
-    # ) -> None:
-    #     """
-    #     This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
-
-    #     Args:
-    #         output: File path for the output image
-    #         strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
-    #             or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
-    #         dpi: dpi (dots per inch) of the output image.
-    #             Setting dpi=100 gives reasonably sized images when viewed in colab notebook
-    #         show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
-    #             if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
-    #     """
-    #     if type(film_color) == str:
-    #         film_rgb = to_rgb(film_color)
-    #     else:
-    #         film_rgb = tuple(film_color)
-
-    #     if type(substrate_color) == str:
-    #         sub_rgb = to_rgb(substrate_color)
-    #     else:
-    #         sub_rgb = tuple(substrate_color)
-
-    #     (
-    #         sub_matrix,
-    #         sub_images,
-    #         film_matrix,
-    #         film_images,
-    #     ) = self._get_oriented_cell_and_images(strain=strain)
-
-    #     interface_matrix = self._orthogonal_structure.lattice.matrix
-
-    #     coords = np.array(
-    #         [
-    #             [0, 0, 0],
-    #             [1, 0, 0],
-    #             [1, 1, 0],
-    #             [0, 1, 0],
-    #             [0, 0, 0],
-    #         ]
-    #     )
-
-    #     interface_coords = coords.dot(interface_matrix)
-
-    #     xlim = [0, 1]
-    #     ylim = [0, 1]
-
-    #     a = interface_matrix[0, :2]
-    #     b = interface_matrix[1, :2]
-    #     borders = np.vstack(
-    #         [
-    #             xlim[0] * a + ylim[0] * b,
-    #             xlim[1] * a + ylim[0] * b,
-    #             xlim[1] * a + ylim[1] * b,
-    #             xlim[0] * a + ylim[1] * b,
-    #             xlim[0] * a + ylim[0] * b,
-    #         ]
-    #     )
-    #     x_size = borders[:, 0].max() - borders[:, 0].min()
-    #     y_size = borders[:, 1].max() - borders[:, 1].min()
-    #     ratio = y_size / x_size
-
-    #     if ratio < 1:
-    #         figx = 5 / ratio
-    #         figy = 5
-    #     else:
-    #         figx = 5
-    #         figy = 5 * ratio
-
-    #     # TODO add labels to the longer side, left or bottom/top to make the figure more square
-    #     if figy >= figx:
-    #         mosaic = """
-    #             ACD
-    #             BCE
-    #         """
-    #         x_expand = 2 * (figy / 2.5)
-    #         xtot = figx + x_expand
-
-    #         fig_area = xtot * figy
-
-    #         fig = plt.figure(figsize=(xtot, figy))
-    #         axd = fig.subplot_mosaic(
-    #             mosaic,
-    #             gridspec_kw={
-    #                 "width_ratios": [
-    #                     0.5 * x_expand / xtot,
-    #                     figx / xtot,
-    #                     0.5 * x_expand / xtot,
-    #                 ]
-    #             },
-    #         )
-    #     else:
-    #         mosaic = """
-    #             AB
-    #             CC
-    #             DE
-    #         """
-    #         y_expand = 2 * (figx / 2.5)
-    #         ytot = figy + y_expand
-
-    #         fig_area = figx * ytot
-
-    #         fig = plt.figure(figsize=(figx, ytot))
-    #         axd = fig.subplot_mosaic(
-    #             mosaic,
-    #             gridspec_kw={
-    #                 "height_ratios": [
-    #                     0.5 * y_expand / ytot,
-    #                     figy / ytot,
-    #                     0.5 * y_expand / ytot,
-    #                 ]
-    #             },
-    #         )
-
-    #     fontsize_scale = 14 / 5.92
-    #     fontsize = fontsize_scale * np.sqrt(fig_area)
-
-    #     ax1 = axd["A"]
-    #     ax2 = axd["B"]
-    #     ax3 = axd["D"]
-    #     ax4 = axd["E"]
-
-    #     self._setup_label_axis(ax1)
-    #     self._setup_label_axis(ax2)
-    #     self._setup_label_axis(ax3)
-    #     self._setup_label_axis(ax4)
-
-    #     ax = axd["C"]
-
-    #     sub_a_label = self._get_miller_label(self.substrate.miller_index_a)
-    #     sub_b_label = self._get_miller_label(self.substrate.miller_index_b)
-
-    #     film_a_label = self._get_miller_label(self.film.miller_index_a)
-    #     film_b_label = self._get_miller_label(self.film.miller_index_b)
-
-    #     sub_sc_a_label = self._get_miller_label(self.substrate_a)
-    #     sub_sc_b_label = self._get_miller_label(self.substrate_b)
-
-    #     film_sc_a_label = self._get_miller_label(self.film_a)
-    #     film_sc_b_label = self._get_miller_label(self.film_b)
-
-    #     self._add_arrows(
-    #         ax=ax1,
-    #         matrix=sub_matrix,
-    #         arrow_color=sub_rgb,
-    #         color=sub_rgb + (0.05,),
-    #         size=0.03,
-    #         labels=[sub_a_label, sub_b_label],
-    #         fontsize=fontsize,
-    #     )
-
-    #     self._add_arrows(
-    #         ax=ax2,
-    #         matrix=film_matrix,
-    #         arrow_color=film_rgb,
-    #         color=film_rgb + (0.05,),
-    #         size=0.03,
-    #         labels=[film_a_label, film_b_label],
-    #         fontsize=fontsize,
-    #     )
-
-    #     self._add_arrows(
-    #         ax=ax3,
-    #         matrix=interface_matrix,
-    #         arrow_color="black",
-    #         color=sub_rgb + (0.05,),
-    #         size=0.03,
-    #         labels=[
-    #             f"{int(self._substrate_supercell_scale_factors[0])} \\,"
-    #             + sub_sc_a_label,
-    #             f"{int(self._substrate_supercell_scale_factors[1])} \\,"
-    #             + sub_sc_b_label,
-    #         ],
-    #         fontsize=fontsize,
-    #     )
-
-    #     self._add_arrows(
-    #         ax=ax4,
-    #         matrix=interface_matrix,
-    #         arrow_color="black",
-    #         color=film_rgb + (0.05,),
-    #         size=0.03,
-    #         labels=[
-    #             f"{int(self._film_supercell_scale_factors[0])} \\,"
-    #             + film_sc_a_label,
-    #             f"{int(self._film_supercell_scale_factors[1])} \\,"
-    #             + film_sc_b_label,
-    #         ],
-    #         fontsize=fontsize,
-    #     )
-
-    #     for image in sub_images:
-    #         sub_coords = (coords + image).dot(sub_matrix)
-    #         poly = Polygon(
-    #             xy=sub_coords[:, :2],
-    #             closed=True,
-    #             facecolor=sub_rgb + (substrate_alpha,),
-    #             edgecolor=sub_rgb,
-    #             linewidth=substrate_linewidth,
-    #             zorder=0,
-    #         )
-    #         ax.add_patch(poly)
-
-    #     for image in film_images:
-    #         film_coords = (coords + image).dot(film_matrix)
-    #         poly = Polygon(
-    #             xy=film_coords[:, :2],
-    #             closed=True,
-    #             facecolor=film_rgb + (film_alpha,),
-    #             edgecolor=film_rgb,
-    #             linewidth=film_linewidth,
-    #             zorder=10,
-    #         )
-    #         ax.add_patch(poly)
-
-    #     grid_x = np.linspace(0, 1, 11)
-    #     grid_y = np.linspace(0, 1, 11)
-
-    #     X, Y = np.meshgrid(grid_x, grid_y)
-
-    #     sc_shifts = np.array(
-    #         [
-    #             [1, 0, 0],
-    #             [0, 1, 0],
-    #             [-1, 0, 0],
-    #             [0, -1, 0],
-    #             [1, 1, 0],
-    #             [-1, -1, 0],
-    #             [1, -1, 0],
-    #             [-1, 1, 0],
-    #         ]
-    #     )
-
-    #     for shift in sc_shifts:
-    #         shift_coords = (coords + shift).dot(interface_matrix)
-    #         poly = Polygon(
-    #             xy=shift_coords[:, :2],
-    #             closed=True,
-    #             facecolor="white",
-    #             edgecolor="white",
-    #             linewidth=1,
-    #             zorder=15,
-    #         )
-    #         ax.add_patch(poly)
-
-    #     ax.plot(
-    #         interface_coords[:, 0],
-    #         interface_coords[:, 1],
-    #         color="black",
-    #         linewidth=3,
-    #         zorder=20,
-    #     )
-
-    #     x_range = interface_coords[:, 0].max() - interface_coords[:, 0].min()
-    #     y_range = interface_coords[:, 1].max() - interface_coords[:, 1].min()
-    #     x_margin = 0.05 * x_range
-    #     y_margin = 0.05 * y_range
-
-    #     ax.set_xlim(
-    #         interface_coords[:, 0].min() - x_margin,
-    #         interface_coords[:, 0].max() + x_margin,
-    #     )
-    #     ax.set_ylim(
-    #         interface_coords[:, 1].min() - y_margin,
-    #         interface_coords[:, 1].max() + y_margin,
-    #     )
-
-    #     ax.set_aspect("equal")
-    #     ax.axis("off")
-
-    #     fig.tight_layout()
-    #     fig.savefig(output, bbox_inches="tight")
-
-    #     if not show_in_colab:
-    #         plt.close()
-
     def plot_interface(
         self,
         output: str = "interface_view.png",
-        strain: bool = True,
         dpi: int = 400,
-        film_color: Union[str, list] = "firebrick",
-        substrate_color: Union[str, list] = "blue",
-        film_alpha: float = 0.05,
-        substrate_alpha: float = 0.05,
-        film_linewidth: float = 2,
-        substrate_linewidth: float = 2,
+        film_color: str = "green",
+        substrate_color: str = "orange",
         show_in_colab: bool = False,
     ) -> None:
         """
@@ -3566,450 +2913,18 @@ class Interface:
 
         Args:
             output: File path for the output image
-            strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
-                or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
             dpi: dpi (dots per inch) of the output image.
                 Setting dpi=100 gives reasonably sized images when viewed in colab notebook
             film_color: Color to represent the film lattice vectors
             substrate_color: Color to represent the substrate lattice vectors
-            film_alpha: Tranparency of the film color (ranging from 0 to 1)
-            substrate_alpha: Tranparency of the substrate color (ranging from 0 to 1)
-            film_linewidth: Linewidth of the film lattice vector edges
-            substrate_linewidth: Linewidth of the substrate lattice vector edges
             show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
                 if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
         """
-        if type(film_color) == str:
-            film_rgb = to_rgb(film_color)
-        else:
-            film_rgb = tuple(film_color)
-
-        if type(substrate_color) == str:
-            sub_rgb = to_rgb(substrate_color)
-        else:
-            sub_rgb = tuple(substrate_color)
-
-        (
-            sub_matrix,
-            sub_images,
-            film_matrix,
-            film_images,
-        ) = self._get_oriented_cell_and_images(strain=strain)
-
-        interface_matrix = self._orthogonal_structure.lattice.matrix
-
-        coords = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0, 0, 0],
-            ]
+        plot_match(
+            match=self.match,
+            padding=0.2,
+            substrate_color=substrate_color,
+            film_color=film_color,
+            output=output,
+            show_in_colab=show_in_colab,
         )
-
-        interface_coords = coords.dot(interface_matrix)
-
-        a = interface_matrix[0, :2]
-        b = interface_matrix[1, :2]
-
-        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
-
-        x_size = borders[:, 0].max() - borders[:, 0].min()
-        y_size = borders[:, 1].max() - borders[:, 1].min()
-        ratio = y_size / x_size
-
-        if ratio < 1:
-            figx = 6 / ratio
-            figy = 6
-        else:
-            figx = 6
-            figy = 6 * ratio
-
-        # TODO add labels to the longer side, left or bottom/top to make the figure more square
-        scale = 2.75
-        if figy >= figx:
-            mosaic = """
-                AC
-                BC
-            """
-            x_expand = figy / scale
-            xtot = figx + x_expand
-
-            fig_area = xtot * figy
-
-            fig = plt.figure(figsize=(xtot, figy))
-            axd = fig.subplot_mosaic(
-                mosaic,
-                gridspec_kw={
-                    "width_ratios": [
-                        x_expand / xtot,
-                        figx / xtot,
-                    ]
-                },
-            )
-            ax1 = axd["A"]
-            ax2 = axd["B"]
-            stretch = 1 + ((scale - 2) / 1.5)
-            ax1.set_xlim(-1.75, 1.75)
-            ax1.set_ylim(-1.75, 1.75 * stretch)
-            ax2.set_xlim(-1.75, 1.75)
-            ax2.set_ylim(-1.75 * stretch, 1.75)
-        else:
-            mosaic = """
-                CC
-                AB
-            """
-            y_expand = figx / scale
-            ytot = figy + y_expand
-
-            fig_area = figx * ytot
-
-            fig = plt.figure(figsize=(figx, ytot))
-            axd = fig.subplot_mosaic(
-                mosaic,
-                gridspec_kw={
-                    "height_ratios": [
-                        figy / ytot,
-                        y_expand / ytot,
-                    ]
-                },
-            )
-            ax1 = axd["A"]
-            ax2 = axd["B"]
-            stretch = 1 + ((scale - 2) / 1.5)
-            ax1.set_xlim(-1.75 * stretch, 1.75)
-            ax1.set_ylim(-1.75, 1.75)
-            ax2.set_xlim(-1.75, 1.75 * stretch)
-            ax2.set_ylim(-1.75, 1.75)
-
-        fontsize_scale = 15 / 5.92
-        linewidth_scale = 1 / 5.92
-        fontsize = fontsize_scale * np.sqrt(fig_area)
-        lw = linewidth_scale * np.sqrt(fig_area)
-
-        self._setup_label_axis(ax1)
-        self._setup_label_axis(ax2)
-
-        ax = axd["C"]
-
-        sub_a_label = self._get_miller_label(self.substrate.miller_index_a)
-        sub_b_label = self._get_miller_label(self.substrate.miller_index_b)
-
-        film_a_label = self._get_miller_label(self.film.miller_index_a)
-        film_b_label = self._get_miller_label(self.film.miller_index_b)
-
-        sub_sc_a_label = self._get_miller_label(self.substrate_a)
-        sub_sc_b_label = self._get_miller_label(self.substrate_b)
-
-        film_sc_a_label = self._get_miller_label(self.film_a)
-        film_sc_b_label = self._get_miller_label(self.film_b)
-
-        self._add_arrows(
-            ax=ax1,
-            matrix=sub_matrix,
-            arrow_color=sub_rgb,
-            color=sub_rgb + (0.05,),
-            size=0.03,
-            labels=[sub_a_label, sub_b_label],
-            fontsize=fontsize,
-            linewidth=lw * 2,
-        )
-
-        self._add_arrows(
-            ax=ax2,
-            matrix=film_matrix,
-            arrow_color=film_rgb,
-            color=film_rgb + (0.05,),
-            size=0.03,
-            labels=[film_a_label, film_b_label],
-            fontsize=fontsize,
-            linewidth=lw * 2,
-        )
-
-        for image in sub_images:
-            sub_coords = (coords + image).dot(sub_matrix)
-            poly = Polygon(
-                xy=sub_coords[:, :2],
-                closed=True,
-                facecolor=sub_rgb + (substrate_alpha,),
-                edgecolor=sub_rgb,
-                linewidth=lw * substrate_linewidth,
-                zorder=0,
-            )
-            ax.add_patch(poly)
-
-        for image in film_images:
-            film_coords = (coords + image).dot(film_matrix)
-            poly = Polygon(
-                xy=film_coords[:, :2],
-                closed=True,
-                facecolor=film_rgb + (film_alpha,),
-                edgecolor=film_rgb,
-                linewidth=lw * film_linewidth,
-                zorder=10,
-            )
-            ax.add_patch(poly)
-
-        grid_x = np.linspace(0, 1, 11)
-        grid_y = np.linspace(0, 1, 11)
-
-        X, Y = np.meshgrid(grid_x, grid_y)
-
-        sc_shifts = np.array(
-            [
-                [1, 0, 0],
-                [0, 1, 0],
-                [-1, 0, 0],
-                [0, -1, 0],
-                [1, 1, 0],
-                [-1, -1, 0],
-                [1, -1, 0],
-                [-1, 1, 0],
-            ]
-        )
-
-        for shift in sc_shifts:
-            shift_coords = (coords + shift).dot(interface_matrix)
-            poly = Polygon(
-                xy=shift_coords[:, :2],
-                closed=True,
-                facecolor="white",
-                edgecolor="white",
-                linewidth=lw * 1,
-                zorder=15,
-            )
-            ax.add_patch(poly)
-
-        ax.plot(
-            interface_coords[:, 0],
-            interface_coords[:, 1],
-            color="black",
-            linewidth=lw * 3,
-            zorder=20,
-        )
-
-        x_range = interface_coords[:, 0].max() - interface_coords[:, 0].min()
-        y_range = interface_coords[:, 1].max() - interface_coords[:, 1].min()
-        x_margin = 0.15 * x_range
-        y_margin = 0.15 * y_range
-
-        ax.set_xlim(
-            interface_coords[:, 0].min() - x_margin,
-            interface_coords[:, 0].max() + x_margin,
-        )
-        ax.set_ylim(
-            interface_coords[:, 1].min() - y_margin,
-            interface_coords[:, 1].max() + y_margin,
-        )
-
-        xlabel = " ".join(
-            [
-                f"{int(self._film_supercell_scale_factors[0])}",
-                film_sc_a_label,
-                "_{F}",
-                "||",
-                f"{int(self._substrate_supercell_scale_factors[0])}",
-                sub_sc_a_label,
-                "_{S}",
-            ]
-        )
-
-        ylabel = " ".join(
-            [
-                f"{int(self._film_supercell_scale_factors[1])}",
-                film_sc_b_label,
-                "_{F}",
-                "||",
-                f"{int(self._substrate_supercell_scale_factors[1])}",
-                sub_sc_b_label,
-                "_{S}",
-            ]
-        )
-
-        t_not_show = ax.text(
-            0.5 * interface_matrix[0][0],
-            0.5 * interface_matrix[0][1],
-            "$" + xlabel + "$",
-            fontsize=fontsize,
-            ha="center",
-            va="center",
-            zorder=100,
-        )
-
-        fig.canvas.draw()
-        bbox = ax.transData.inverted().transform_bbox(
-            t_not_show.get_window_extent(fig.canvas.get_renderer())
-        )
-        height = 0.75 * bbox.height
-        t_not_show.remove()
-
-        x_label_shift = self._add_sc_labels(
-            ax,
-            label=xlabel,
-            vector=interface_matrix[0],
-            fontsize=fontsize,
-            rotation=0,
-            linewidth=lw * 2,
-            height=height,
-        )
-        y_label_shift = self._add_sc_labels(
-            ax,
-            label=ylabel,
-            vector=interface_matrix[1],
-            fontsize=fontsize,
-            rotation=np.rad2deg(self.match.substrate_angle),
-            linewidth=lw * 2,
-            height=height,
-        )
-
-        x_range = interface_coords[:, 0].max() - interface_coords[:, 0].min()
-        y_range = interface_coords[:, 1].max() - interface_coords[:, 1].min()
-        x_margin = 0.05 * x_range
-        y_margin = 0.05 * y_range
-
-        ax.set_xlim(
-            interface_coords[:, 0].min() + (2 * y_label_shift[0]) - x_margin,
-            interface_coords[:, 0].max() + x_margin,
-        )
-        ax.set_ylim(
-            interface_coords[:, 1].min() + (2 * x_label_shift[1]) - y_margin,
-            interface_coords[:, 1].max() + (2 * y_label_shift[1]) + y_margin,
-        )
-
-        ax.tick_params(
-            left=False, labelleft=False, bottom=False, labelbottom=False
-        )
-        ax.spines[:].set_visible(False)
-
-        ax.set_aspect("equal")
-        ax.axis("off")
-
-        fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
-
-        if not show_in_colab:
-            plt.close()
-
-    # def plot_interface_old(
-    #     self,
-    #     output: str = "interface_view.png",
-    #     strain: bool = True,
-    #     dpi: int = 400,
-    #     show_in_colab: bool = False,
-    # ) -> None:
-    #     """
-    #     This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
-
-    #     Args:
-    #         output: File path for the output image
-    #         strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
-    #             or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
-    #         dpi: dpi (dots per inch) of the output image.
-    #             Setting dpi=100 gives reasonably sized images when viewed in colab notebook
-    #         show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
-    #             if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
-    #     """
-    #     sub_struc = self.substrate._orthogonal_slab_structure.copy()
-    #     sub_a_to_i_op = SymmOp.from_rotation_and_translation(
-    #         rotation_matrix=self._substrate_a_to_i, translation_vec=np.zeros(3)
-    #     )
-    #     sub_struc.apply_operation(sub_a_to_i_op)
-
-    #     film_struc = self.film._orthogonal_slab_structure.copy()
-    #     film_a_to_i_op = SymmOp.from_rotation_and_translation(
-    #         rotation_matrix=self._film_a_to_i, translation_vec=np.zeros(3)
-    #     )
-    #     film_struc.apply_operation(film_a_to_i_op)
-
-    #     sub_matrix = sub_struc.lattice.matrix
-    #     film_matrix = film_struc.lattice.matrix
-
-    #     sub_sc_matrix = deepcopy(self._substrate_supercell.lattice.matrix)
-    #     film_sc_matrix = deepcopy(self._film_supercell.lattice.matrix)
-
-    #     coords = np.array(
-    #         [
-    #             [0, 0, 0],
-    #             [1, 0, 0],
-    #             [1, 1, 0],
-    #             [0, 1, 0],
-    #             [0, 0, 0],
-    #         ]
-    #     )
-
-    #     sc_shifts = np.array(
-    #         [
-    #             [0, 0, 0],
-    #             [1, 0, 0],
-    #             [0, 1, 0],
-    #             [-1, 0, 0],
-    #             [0, -1, 0],
-    #             [1, 1, 0],
-    #             [-1, -1, 0],
-    #             [1, -1, 0],
-    #             [-1, 1, 0],
-    #         ]
-    #     )
-
-    #     sub_sc_shifts = sc_shifts.dot(sub_sc_matrix)
-    #     film_sc_shifts = sc_shifts.dot(film_sc_matrix)
-    #     sub_sl = coords.dot(sub_sc_matrix)
-
-    #     sub_struc, sub_inv_matrix = self._generate_sc_for_interface_view(
-    #         struc=sub_struc,
-    #         transformation_matrix=self.match.substrate_sl_transform,
-    #     )
-
-    #     film_struc, film_inv_matrix = self._generate_sc_for_interface_view(
-    #         struc=film_struc,
-    #         transformation_matrix=self.match.film_sl_transform,
-    #     )
-
-    #     fig, ax = plt.subplots(figsize=(4, 4), dpi=dpi)
-
-    #     for c in sub_struc.cart_coords:
-    #         for shift in sub_sc_shifts:
-    #             self._plot_interface_view(
-    #                 ax=ax,
-    #                 zero_coord=c,
-    #                 supercell_shift=shift,
-    #                 cell_vetices=coords,
-    #                 slab_matrix=sub_matrix,
-    #                 sc_inv_matrix=sub_inv_matrix,
-    #                 is_film=False,
-    #                 strain=strain,
-    #                 facecolor=(0, 0, 1, 0.2),
-    #                 edgecolor=(0, 0, 1, 1),
-    #             )
-
-    #     for c in film_struc.cart_coords:
-    #         for shift in film_sc_shifts:
-    #             self._plot_interface_view(
-    #                 ax=ax,
-    #                 zero_coord=c,
-    #                 supercell_shift=shift,
-    #                 cell_vetices=coords,
-    #                 slab_matrix=film_matrix,
-    #                 sc_inv_matrix=film_inv_matrix,
-    #                 is_film=True,
-    #                 strain=strain,
-    #                 facecolor=(200 / 255, 0, 0, 0.2),
-    #                 edgecolor=(200 / 255, 0, 0, 1),
-    #             )
-
-    #     ax.plot(
-    #         sub_sl[:, 0],
-    #         sub_sl[:, 1],
-    #         color="black",
-    #         linewidth=3,
-    #     )
-
-    #     ax.set_aspect("equal")
-    #     ax.axis("off")
-
-    #     fig.tight_layout()
-    #     fig.savefig(output, bbox_inches="tight")
-
-    #     if not show_in_colab:
-    #         plt.close()

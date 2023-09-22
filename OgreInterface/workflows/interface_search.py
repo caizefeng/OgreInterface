@@ -1,19 +1,20 @@
-from OgreInterface.generate import InterfaceGenerator, SurfaceGenerator
-from OgreInterface.surface_match import IonicSurfaceMatcher
-from OgreInterface.surface_energy import IonicSurfaceEnergy
-from OgreInterface import utils
+from typing import Union, List, Tuple, Optional
+from os.path import isdir, join
+import os
+
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.core.structure import Structure
 from ase import Atoms
 import numpy as np
-from os.path import isdir, join
-import os
-from itertools import product
 import matplotlib.pyplot as plt
-from cmcrameri import cm
 import pandas as pd
 import seaborn as sns
-from typing import Union, List, Tuple
+
+from OgreInterface.generate import InterfaceGenerator, SurfaceGenerator
+from OgreInterface.surface_match import IonicSurfaceMatcher
+from OgreInterface.surface_energy import IonicSurfaceEnergy
+from OgreInterface.plotting_tools import plot_surface_charge_matrix
+from OgreInterface import utils
 
 
 class IonicInterfaceSearch:
@@ -49,19 +50,19 @@ class IonicInterfaceSearch:
         film_miller_index: List[int],
         minimum_slab_thickness: float = 18.0,
         max_area_mismatch: float = 0.01,
-        max_angle_strain: float = 0.01,
-        max_linear_strain: float = 0.01,
-        max_area: float = 500.0,
+        max_strain: float = 0.01,
+        max_area: Optional[float] = None,
+        substrate_strain_fraction: float = 0.0,
         refine_structure: bool = True,
-        suppress_warnings: bool = False,
+        suppress_warnings: bool = True,
         auto_determine_born_n: bool = False,
         born_n: float = 12.0,
-        n_particles_PSO: int = 15,
+        n_particles_PSO: int = 20,
         max_iterations_PSO: int = 150,
         z_bounds_PSO: List[float] = [1.0, 6.0],
         grid_density_PES: float = 2.5,
         use_most_stable_substrate: bool = True,
-        cmap_PES=cm.lipari,
+        cmap_PES="coolwarm",
     ):
         self._refine_structure = refine_structure
         self._suppress_warnings = suppress_warnings
@@ -88,8 +89,8 @@ class IonicInterfaceSearch:
         self._substrate_miller_index = substrate_miller_index
         self._film_miller_index = film_miller_index
         self._max_area_mismatch = max_area_mismatch
-        self._max_angle_strain = max_angle_strain
-        self._max_linear_strain = max_linear_strain
+        self._max_strain = max_strain
+        self._substrate_strain_fraction = substrate_strain_fraction
         self._max_area = max_area
         self._cmap_PES = cmap_PES
 
@@ -203,7 +204,6 @@ class IonicInterfaceSearch:
         min_surface_energy = surface_energies.min()
 
         most_stable_indices = np.where(surface_energies == min_surface_energy)
-        print(most_stable_indices)
 
         return most_stable_indices[0]
 
@@ -246,23 +246,38 @@ class IonicInterfaceSearch:
         filter_on_charge: bool = True,
         output_folder: str = None,
     ):
+        if output_folder is None:
+            sub_comp = self._substrate_bulk.composition.reduced_formula
+            film_comp = self._film_bulk.composition.reduced_formula
+            sub_miller = "".join(
+                [str(i) for i in self._substrate_miller_index]
+            )
+            film_miller = "".join([str(i) for i in self._film_miller_index])
+            base_dir = f"{sub_comp}{sub_miller}_{film_comp}{film_miller}"
+
+            current_dirs = [d for d in os.listdir() if base_dir in d]
+
+            if len(current_dirs) > 0:
+                base_dir += f"_{len(current_dirs)}"
+        else:
+            base_dir = output_folder
+
+        if not isdir(base_dir):
+            os.mkdir(base_dir)
+
         substrate_generator, film_generator = self._get_surface_generators()
+
+        plot_surface_charge_matrix(
+            films=film_generator,
+            substrates=substrate_generator,
+            output=join(base_dir, "surface_charge_matrix.png"),
+        )
 
         film_and_substrate_inds = self._get_film_and_substrate_inds(
             film_generator=film_generator,
             substrate_generator=substrate_generator,
             filter_on_charge=filter_on_charge,
         )
-
-        if output_folder is not None:
-            base_dir = output_folder
-        else:
-            sub_material = substrate_generator[0].formula
-            film_material = film_generator[0].formula
-            base_dir = f"{film_material}-{sub_material}"
-
-        if not isdir(base_dir):
-            os.mkdir(base_dir)
 
         energies = []
         opt_abz_shifts = []
@@ -293,18 +308,23 @@ class IonicInterfaceSearch:
             interface_generator = InterfaceGenerator(
                 substrate=sub,
                 film=film,
-                max_linear_strain=self._max_linear_strain,
-                max_angle_strain=self._max_angle_strain,
+                max_strain=self._max_strain,
                 max_area_mismatch=self._max_area_mismatch,
                 max_area=self._max_area,
                 interfacial_distance=2.0,
                 vacuum=60,
                 center=True,
+                substrate_strain_fraction=self._substrate_strain_fraction,
             )
 
             # Generate the interfaces
             interfaces = interface_generator.generate_interfaces()
             interface = interfaces[0]
+
+            if i == 0:
+                interface.plot_interface(
+                    output=join(base_dir, "interface_view.png")
+                )
 
             intE_matcher = IonicSurfaceMatcher(
                 interface=interface,
@@ -337,6 +357,7 @@ class IonicInterfaceSearch:
                 output=join(interface_dir, "z_shift.png"),
             )
             intE_matcher.get_optimized_structure()
+
             interface.write_file(join(interface_dir, "POSCAR_interface"))
 
             opt_d = interface.interfacial_distance
@@ -351,6 +372,7 @@ class IonicInterfaceSearch:
             surface_energies.append([film_surface_energy, sub_surface_energy])
 
             energies.append([int_energy, adh_energy])
+            print("")
 
         energies = np.array(energies)
         opt_abz_shifts = np.array(opt_abz_shifts)
@@ -392,7 +414,7 @@ class IonicInterfaceSearch:
         adhE_df.sort_values(by=adhE_key, inplace=True)
 
         fig, (ax_adh, ax_int) = plt.subplots(
-            figsize=(len(df) / 3, 7),
+            figsize=(max(len(df) / 3, 7), 7),
             dpi=400,
             nrows=2,
         )
@@ -423,3 +445,5 @@ class IonicInterfaceSearch:
 
         fig.tight_layout(pad=0.5)
         fig.savefig(join(base_dir, "opt_energies.png"))
+
+        plt.close(fig=fig)

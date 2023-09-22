@@ -1,31 +1,24 @@
-from OgreInterface.surfaces import Interface
-from OgreInterface.score_function.generate_inputs import (
-    generate_input_dict,
-    create_batch,
-)
-from OgreInterface import utils
 from typing import List, Dict
-import numpy as np
+from copy import deepcopy
+import os
+
+from pymatgen.core.structure import Structure
 from matplotlib.colors import Normalize, ListedColormap
+from matplotlib.cm import ScalarMappable
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.patches import Polygon
 from scipy.interpolate import RectBivariateSpline, CubicSpline
-from copy import deepcopy
-import torch
-from pymatgen.core.structure import Structure
-from pymatgen.core.lattice import Lattice
-from pymatgen.core.periodic_table import Element
-from pymatgen.symmetry.analyzer import SymmOp, SpacegroupAnalyzer
-from pymatgen.io.vasp.inputs import Poscar
-from ase.data import chemical_symbols
-import itertools
-import time
-from pyswarms.single.global_best import GlobalBestPSO
+import numpy as np
 from sko.PSO import PSO
 from sko.tools import set_run_mode
-import os
 from tqdm import tqdm
+
+from OgreInterface.surfaces import Interface
+from OgreInterface.score_function import (
+    generate_input_dict,
+    create_batch,
+)
 
 
 def _tqdm_run(self, max_iter=None, precision=None, N=20):
@@ -83,10 +76,8 @@ class BaseSurfaceMatcher:
         self,
         interface: Interface,
         grid_density: float = 2.5,
-        # use_interface_energy: bool = True,
     ):
         self.interface = interface
-        # self.use_interface_energy = use_interface_energy
 
         self.iface = self.interface.get_interface(orthogonal=True).copy()
 
@@ -94,11 +85,8 @@ class BaseSurfaceMatcher:
             H_inds = np.where(np.array(self.iface.atomic_numbers) == 1)[0]
             self.iface.remove_sites(H_inds)
 
-        self.film_bulk = utils.apply_strain_matrix(
-            structure=self.interface.film.oriented_bulk_structure.copy(),
-            strain_matrix=self.interface._strain_matrix,
-        )
-        self.sub_bulk = self.interface.substrate.oriented_bulk_structure.copy()
+        self.film_bulk = self.interface.film_oriented_bulk_structure
+        self.sub_bulk = self.interface.substrate_oriented_bulk_structure
 
         self.film_bulk.add_site_property(
             "is_film",
@@ -108,18 +96,6 @@ class BaseSurfaceMatcher:
             "is_film",
             [False] * len(self.sub_bulk),
         )
-
-        # self.sub_surface = utils.get_layer_supercelll(
-        #     structure=self.sub_bulk,
-        #     layers=self.interface.substrate.layers,
-        #     vacuum_scale=0,
-        # )
-
-        # self.film_surface = utils.get_layer_supercelll(
-        #     structure=self.film_bulk,
-        #     layers=self.interface.film.layers,
-        #     vacuum_scale=0,
-        # )
 
         self.film_sc_part = self.interface.get_film_supercell().copy()
         self.sub_sc_part = self.interface.get_substrate_supercell().copy()
@@ -183,23 +159,7 @@ class BaseSurfaceMatcher:
         else:
             raise "_add_shifts_to_batch should only be used on interfaces that have the is_film property"
 
-    # def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 15):
-    #     bounds = (
-    #         np.array([0.0, 0.0, z_bounds[0]]),
-    #         np.array([1.0, 1.0, z_bounds[1]]),
-    #     )
-    #     options = {"c1": 0.5, "c2": 0.3, "w": 0.9}
-    #     optimizer = GlobalBestPSO(
-    #         n_particles=n_particles,
-    #         dimensions=3,
-    #         options=options,
-    #         bounds=bounds,
-    #     )
-    #     cost, pos = optimizer.optimize(func, iters=max_iters)
-
-    #     return cost, pos
-
-    def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 15):
+    def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 25):
         set_run_mode(func, mode="vectorization")
         print("Running 3D Surface Matching with Particle Swarm Optimization:")
         optimizer = PSO(
@@ -208,9 +168,9 @@ class BaseSurfaceMatcher:
             max_iter=max_iters,
             lb=[0.0, 0.0, z_bounds[0]],
             ub=[1.0, 1.0, z_bounds[1]],
-            w=0.8,
+            w=0.9,
             c1=0.5,
-            c2=0.5,
+            c2=0.3,
             verbose=False,
             dim=3,
         )
@@ -218,110 +178,7 @@ class BaseSurfaceMatcher:
         cost = optimizer.gbest_y
         pos = optimizer.gbest_x
 
-        # bounds = (
-        #     np.array([0.0, 0.0, z_bounds[0]]),
-        #     np.array([1.0, 1.0, z_bounds[1]]),
-        # )
-        # options = {"c1": 0.5, "c2": 0.3, "w": 0.9}
-        # optimizer = GlobalBestPSO(
-        #     n_particles=n_particles,
-        #     dimensions=3,
-        #     options=options,
-        #     bounds=bounds,
-        # )
-        # cost, pos = optimizer.optimize(func, iters=max_iters)
-
         return cost, pos
-
-    def _get_gd_init_points(self):
-        sub_struc = self.interface.substrate.oriented_bulk_structure.copy()
-        is_top = sub_struc.site_properties["is_top"]
-        to_del = np.where(np.logical_not(is_top))[0]
-        sub_struc.remove_sites(to_del)
-
-        sub_a_to_i_op = SymmOp.from_rotation_and_translation(
-            rotation_matrix=self.interface._substrate_a_to_i,
-            translation_vec=np.zeros(3),
-        )
-        sub_struc.apply_operation(sub_a_to_i_op)
-
-        film_struc = self.interface.film.oriented_bulk_structure.copy()
-        is_bottom = film_struc.site_properties["is_bottom"]
-        to_del = np.where(np.logical_not(is_bottom))[0]
-        film_struc.remove_sites(to_del)
-
-        film_a_to_i_op = SymmOp.from_rotation_and_translation(
-            rotation_matrix=self.interface._film_a_to_i,
-            translation_vec=np.zeros(3),
-        )
-        film_struc.apply_operation(film_a_to_i_op)
-
-        unstrained_film_matrix = film_struc.lattice.matrix
-        strain_matrix = (
-            self.interface._film_supercell.lattice.inv_matrix
-            @ self.interface._strained_sub.lattice.matrix
-        )
-        strain_matrix[-1] = np.array([0, 0, 1])
-        strained_matrix = unstrained_film_matrix.dot(strain_matrix.T)
-        film_struc = Structure(
-            lattice=Lattice(strained_matrix),
-            species=film_struc.species,
-            coords=film_struc.frac_coords,
-            to_unit_cell=True,
-            coords_are_cartesian=False,
-            site_properties=film_struc.site_properties,
-        )
-
-        # Poscar(sub_struc).write_file("POSCAR_sub_top")
-        # Poscar(film_struc).write_file("POSCAR_film_bot")
-
-        sub_equivs = sub_struc.site_properties["bulk_equivalent"]
-        film_equivs = film_struc.site_properties["bulk_equivalent"]
-
-        _, sub_unique = np.unique(sub_equivs, return_index=True)
-        _, film_unique = np.unique(film_equivs, return_index=True)
-
-        film_cart_coords = film_struc.cart_coords[:, :2]
-        sub_cart_coords = sub_struc.cart_coords[:, :2]
-        # inds = itertools.product(
-        #     # film_unique,
-        #     # sub_unique,
-        #     # [1, 4]
-        #     range(len(film_cart_coords)),
-        #     range(len(sub_cart_coords)),
-        # )
-
-        shifts = []
-        unique_inds = []
-        for i, film_coords in enumerate(film_cart_coords):
-            for j, sub_coords in enumerate(sub_cart_coords):
-                shift = sub_coords - film_coords
-                shifts.append(shift)
-                unique_inds.append((film_equivs[i], sub_equivs[j]))
-                # unique_inds.append(film_equivs[i])
-
-        shifts = np.c_[shifts, np.zeros(len(shifts))]
-        inv_matrix = np.linalg.inv(self.shift_matrix)
-        frac_shifts = shifts.dot(inv_matrix)
-        frac_shifts = np.round(np.mod(frac_shifts, 1), 5)
-        # unique_shifts = np.unique(frac_shifts, axis=0)
-        points = (frac_shifts + self.shift_images[0]).dot(self.shift_matrix)
-
-        colors = [
-            "red",
-            "green",
-            "blue",
-            "magenta",
-            "orange",
-            "purple",
-            "white",
-            "yellow",
-        ]
-        color_dict = {s: c for s, c in zip(set(unique_inds), colors)}
-        plot_colors = [color_dict[s] for s in unique_inds]
-
-        return points[:, :2]
-        # , plot_colors
 
     def _get_shift_matrix_and_images(self) -> List[np.ndarray]:
         (
@@ -341,10 +198,6 @@ class BaseSurfaceMatcher:
         return shift_matrix, shift_images
 
     def _generate_shifts(self) -> List[np.ndarray]:
-        iface_inv_matrix = (
-            self.interface._orthogonal_structure.lattice.inv_matrix
-        )
-
         grid_density_x = int(
             np.round(np.linalg.norm(self.shift_matrix[0]) * self.grid_density)
         )
@@ -367,13 +220,9 @@ class BaseSurfaceMatcher:
         )
 
         prim_cart_shifts = prim_frac_shifts.dot(self.shift_matrix)
-        # iface_frac_shifts = prim_cart_shifts.dot(iface_inv_matrix).reshape(
-        #     X.shape + (-1,)
-        # )
 
         return prim_cart_shifts.reshape(X.shape + (-1,))
 
-    # TODO create a function that can write out the shifted structures for DFT calculations and also read in the structure and plot them nicely
     def get_structures_for_DFT(self, output_folder="PES"):
         if not os.path.isdir(output_folder):
             os.mkdir(output_folder)
@@ -381,7 +230,6 @@ class BaseSurfaceMatcher:
         all_shifts = self.shifts
         unique_shifts = all_shifts[:-1, :-1]
         shifts = unique_shifts.reshape(-1, 3).dot(self.inv_matrix)
-        # shifts = np.mod(shifts, 1)
 
         for i, shift in enumerate(shifts):
             self.interface.shift_film_inplane(
@@ -645,10 +493,9 @@ class BaseSurfaceMatcher:
             "roma",
             "bam",
             "vanimo",
+            "managua",
         ]
         diverging_names = mpl_diverging_names + cm_diverging_names
-
-        Z /= np.abs(np.min(Z))
 
         min_Z = np.nanmin(Z)
         max_Z = np.nanmax(Z)
@@ -668,67 +515,37 @@ class BaseSurfaceMatcher:
         else:
             norm = Normalize(vmin=min_Z, vmax=max_Z)
 
-        im = ax.contourf(
+        ax.contourf(
             X,
             Y,
             Z,
             cmap=cmap,
             levels=200,
-            # norm=Normalize(vmin=np.nanmin(Z), vmax=np.nanmax(Z)),
             norm=norm,
         )
 
         if add_color_bar:
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("top", size="5%", pad=0.1)
-            cbar = fig.colorbar(im, cax=cax, orientation="horizontal")
+            cbar = fig.colorbar(
+                ScalarMappable(norm=norm, cmap=cmap),
+                cax=cax,
+                orientation="horizontal",
+            )
             cbar.ax.tick_params(labelsize=fontsize)
             cbar.ax.locator_params(nbins=3)
 
             if show_max:
-                E_max = np.min(Z)
-                label = "$-E_{adh}/|E_{min}|$ : $E_{min}$ = " + f"{E_max:.4f}"
-                # label = (
-                #     "$-E_{adh}$ (eV/$\\AA^{2}$) : "
-                #     + "$E_{min}$ = "
-                #     + f"{E_max:.4f}"
-                # )
+                E_opt = np.min(Z)
+                label = "$E_{adh}$ (eV) : $E_{min}$ = " + f"{E_opt:.4f} eV"
                 cbar.set_label(label, fontsize=fontsize, labelpad=8)
             else:
-                # label = "$-E_{adh}$ (eV/$\\AA^{2}$)"
-                label = "$-E_{adh}/|E_{min}|$"
+                label = "$E_{adh}$ (eV)"
                 cbar.set_label(label, fontsize=fontsize, labelpad=8)
 
             cax.xaxis.set_ticks_position("top")
             cax.xaxis.set_label_position("top")
             ax.tick_params(labelsize=fontsize)
-
-    # def _get_interpolated_data_old(self, Z, image):
-    #     print("Using old interpolation")
-    #     x_grid = np.linspace(0, 1, self.grid_density_x)
-    #     y_grid = np.linspace(0, 1, self.grid_density_y)
-    #     spline = RectBivariateSpline(y_grid, x_grid, Z)
-
-    #     x_grid_interp = np.linspace(0, 1, 101)
-    #     y_grid_interp = np.linspace(0, 1, 101)
-
-    #     X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
-    #     Z_interp = spline.ev(xi=Y_interp, yi=X_interp)
-    #     frac_shifts = (
-    #         np.c_[
-    #             X_interp.ravel(),
-    #             Y_interp.ravel(),
-    #             np.zeros(X_interp.shape).ravel(),
-    #         ]
-    #         + image
-    #     )
-
-    #     cart_shifts = frac_shifts.dot(self.shift_matrix)
-
-    #     X_cart = cart_shifts[:, 0].reshape(X_interp.shape)
-    #     Y_cart = cart_shifts[:, 1].reshape(Y_interp.shape)
-
-    #     return X_cart, Y_cart, Z_interp
 
     def _get_interpolated_data(self, Z, image):
         x_grid = np.linspace(-1, 2, (3 * self.grid_density_x) - 2)
@@ -860,53 +677,9 @@ class BaseSurfaceMatcher:
 
         return max_Z
 
-    def _adam(
-        self,
-        score_func,
-        score_func_inputs,
-        beta1=0.9,
-        beta2=0.999,
-        eta=0.01,
-        epsilon=1e-7,
-        iterations=300,
-    ):
-        inv_shift_matrix = np.linalg.inv(self.shift_matrix)
-        init_position = score_func_inputs["shift"]
-        opt_position = [np.copy(init_position)]
-        m = np.zeros(init_position.shape)
-        v = np.zeros(init_position.shape)
-
-        for i in range(iterations):
-            print(opt_position[i])
-            force_norm, gradient = score_func.forward(**score_func_inputs)
-            m = beta1 * m + (1 - beta1) * gradient
-            v = beta2 * v + (1 - beta2) * gradient**2
-            m_hat = m / (1 - beta1)
-            v_hat = v / (1 - beta2)
-            update = m_hat / (np.sqrt(v_hat) + epsilon)
-            new_opt_position = opt_position[i] - eta * update
-
-            new_opt_frac_coords = (
-                np.array([new_opt_position[0], new_opt_position[1], 0.0]).dot(
-                    inv_shift_matrix
-                )
-                - self.shift_images[0]
-            )
-            new_opt_frac_coords = np.mod(new_opt_frac_coords, 1)
-            new_opt_cart_coords = (
-                new_opt_frac_coords + self.shift_images[0]
-            ).dot(self.shift_matrix)
-            new_opt_position[:2] = new_opt_cart_coords[:2]
-            opt_position.append(new_opt_position)
-            score_func_inputs["shift"] = torch.from_numpy(new_opt_position)
-
-        opt_position = np.vstack(opt_position)
-
-        return opt_position
-
     def run_surface_matching(
         self,
-        cmap: str = "jet",
+        cmap: str = "coolwarm",
         fontsize: int = 14,
         output: str = "PES.png",
         dpi: int = 400,
@@ -969,7 +742,7 @@ class BaseSurfaceMatcher:
                 save_raw_data_file,
                 x_shifts=X,
                 y_shifts=Y,
-                energies=Z_iface,
+                energies=Z_adh,
             )
 
         a = self.matrix[0, :2]
@@ -1007,7 +780,7 @@ class BaseSurfaceMatcher:
             ax=ax,
             X=X,
             Y=Y,
-            Z=Z_iface,
+            Z=Z_adh,
             dpi=dpi,
             cmap=cmap,
             fontsize=fontsize,
@@ -1082,7 +855,7 @@ class BaseSurfaceMatcher:
             np.savez(
                 save_raw_data_file,
                 interfacial_distances=interfacial_distances,
-                energies=interface_energy,
+                energies=adhesion_energy,
             )
 
         fig, axs = plt.subplots(
@@ -1090,7 +863,7 @@ class BaseSurfaceMatcher:
             dpi=dpi,
         )
 
-        cs = CubicSpline(interfacial_distances, interface_energy)
+        cs = CubicSpline(interfacial_distances, adhesion_energy)
         new_x = np.linspace(
             interfacial_distances.min(),
             interfacial_distances.max(),
@@ -1129,7 +902,7 @@ class BaseSurfaceMatcher:
         )
         axs.tick_params(labelsize=fontsize)
         axs.set_ylabel(
-            "$-E_{adh}$ (eV/$\\AA^{2}$)",
+            "$E_{adh}$ (eV/$\\AA^{2}$)",
             fontsize=fontsize,
         )
         axs.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)

@@ -1,8 +1,9 @@
 from typing import Dict, List, Optional
+from copy import deepcopy
+
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 import numpy as np
-from copy import deepcopy
 from matscipy.neighbours import neighbour_list
 
 
@@ -37,61 +38,6 @@ def create_batch(
             batch_inputs[k] = batch_val.astype(new_dtype)
 
     return batch_inputs
-
-
-# def generate_input_dict(
-#     structure: Structure,
-#     cutoff: float,
-#     interface: bool = False,
-# ) -> Dict:
-
-#     if interface:
-#         tn = TorchInterfaceNeighborList(cutoff=cutoff)
-#     else:
-#         tn = TorchNeighborList(cutoff=cutoff)
-
-#     site_props = structure.site_properties
-
-#     is_film = torch.tensor(site_props["is_film"], dtype=torch.long)
-#     R = torch.from_numpy(structure.cart_coords)
-#     cell = torch.from_numpy(deepcopy(structure.lattice.matrix))
-
-#     e_negs = torch.Tensor([s.specie.X for s in structure])
-
-#     if interface:
-#         pbc = torch.Tensor([True, True, False]).to(dtype=torch.bool)
-#     else:
-#         pbc = torch.Tensor([True, True, True]).to(dtype=torch.bool)
-
-#     input_dict = {
-#         "n_atoms": torch.tensor([len(structure)]),
-#         "Z": torch.tensor(structure.atomic_numbers, dtype=torch.long),
-#         "R": R,
-#         "cell": cell,
-#         "pbc": pbc,
-#         "is_film": is_film,
-#         "e_negs": e_negs,
-#     }
-
-#     if "charge" in site_props:
-#         charges = torch.tensor(site_props["charge"])
-#         input_dict["partial_charges"] = charges
-
-#     if "born_ns" in site_props:
-#         ns = torch.tensor(site_props["born_ns"])
-#         input_dict["born_ns"] = ns
-
-#     tn.forward(inputs=input_dict)
-#     input_dict["cell"] = input_dict["cell"].view(-1, 3, 3)
-#     input_dict["pbc"] = input_dict["pbc"].view(-1, 3)
-
-#     for k, v in input_dict.items():
-#         if "float" in str(v.dtype):
-#             input_dict[k] = v.to(dtype=torch.float32)
-#         if "idx" in k:
-#             input_dict[k] = v.to(dtype=torch.long)
-
-#     return input_dict
 
 
 def generate_input_dict(
@@ -150,10 +96,3 @@ def generate_input_dict(
         input_dict["r0s"] = r0s
 
     return input_dict
-
-
-if __name__ == "__main__":
-    from ase.build import bulk
-
-    InAs = bulk("InAs", crystalstructure="zincblende", a=5.6)
-    charge_dict = {"In": 0.0, "As": 0.0}

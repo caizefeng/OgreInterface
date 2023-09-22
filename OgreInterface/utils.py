@@ -1,18 +1,19 @@
 from __future__ import annotations
-import numpy as np
 import copy
 from functools import reduce
+import itertools
+import functools
+import math
+import collections
+
 from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.core.periodic_table import DummySpecies
-import itertools
-import functools
-import math
-import collections
 from pymatgen.analysis.graphs import StructureGraph
 from pymatgen.analysis.local_env import JmolNN
+import numpy as np
 import networkx as nx
 import spglib
 
@@ -29,6 +30,21 @@ def _get_colored_molecules(struc, output):
 
     colored_struc.sort()
     Poscar(colored_struc).write_file(output)
+
+
+def get_latex_formula(formula: str) -> str:
+    groups = itertools.groupby(formula, key=lambda x: x.isdigit())
+
+    latex_formula = ""
+    for k, group in groups:
+        if k:
+            part = "$_{" + "".join(list(group)) + "}$"
+        else:
+            part = "".join(list(group))
+
+        latex_formula += part
+
+    return latex_formula
 
 
 def apply_strain_matrix(

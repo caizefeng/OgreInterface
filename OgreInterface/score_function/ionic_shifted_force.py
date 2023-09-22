@@ -1,8 +1,9 @@
 from typing import Dict, Optional, Tuple
-import time
+
 import numpy as np
 from scipy.special import erfc
-from OgreInterface.score_function.scatter import scatter_add, scatter_add_bin
+
+from OgreInterface.score_function.scatter import scatter_add_bin
 
 
 class IonicPotentialError(Exception):
@@ -30,10 +31,8 @@ class IonicShiftedForcePotential:
     def forward(
         self,
         inputs: Dict[str, np.ndarray],
-        # shift: np.ndarray,
         constant_coulomb_contribution: Optional[np.ndarray] = None,
         constant_born_contribution: Optional[np.ndarray] = None,
-        # r0_array: np.ndarray,
     ) -> Dict[str, np.ndarray]:
         q = inputs["partial_charges"]
         idx_m = inputs["idx_m"]
@@ -59,6 +58,8 @@ class IonicShiftedForcePotential:
         idx_i = idx_i_all[in_cutoff]
         idx_j = idx_j_all[in_cutoff]
         d_ij = distances[in_cutoff]
+
+        # If the neural atom has a larger electronegativity than a negatively charged ion then it should be attractive
 
         r0_ij = r0s[idx_i] + r0s[idx_j]
         n_ij = (ns[idx_i] + ns[idx_j]) / 2

@@ -1,23 +1,24 @@
-from OgreInterface.score_function.ionic_shifted_force import (
-    IonicShiftedForcePotential,
-)
-from OgreInterface.score_function.generate_inputs import create_batch
-from OgreInterface.surfaces import Interface
-from OgreInterface.surface_match.base_surface_matcher import BaseSurfaceMatcher
+from typing import List, Dict, Tuple
+from itertools import groupby, combinations_with_replacement, product
+from os.path import join, dirname, split
+
 from pymatgen.core.periodic_table import Element
 from pymatgen.analysis.local_env import CrystalNN
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.data import chemical_symbols, covalent_radii
-from typing import List, Dict, Tuple
-from ase import Atoms
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.interpolate import RectBivariateSpline, CubicSpline
-from itertools import groupby, combinations_with_replacement, product
 from matscipy.neighbours import neighbour_list
+import pandas as pd
+import numpy as np
 
-# import torch
-import time
+from OgreInterface.score_function import (
+    create_batch,
+    IonicShiftedForcePotential,
+)
+from OgreInterface.surfaces import Interface
+from OgreInterface.surface_match.base_surface_matcher import BaseSurfaceMatcher
+
+
+DATA_PATH = join(split(dirname(__file__))[0], "data")
 
 
 class IonicSurfaceMatcher(BaseSurfaceMatcher):
@@ -56,6 +57,9 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             grid_density=grid_density,
             # use_interface_energy=use_interface_energy,
         )
+        self._ionic_radii_df = pd.read_csv(
+            join(DATA_PATH, "ionic_radii_data.csv")
+        )
         self._auto_determine_born_n = auto_determine_born_n
         self._born_n = born_n
         self._cutoff = 18.0
@@ -65,25 +69,19 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             film=self.interface.film.bulk_structure,
             charge_dict=self.charge_dict,
         )
+
         self._add_born_ns(self.iface)
         self._add_born_ns(self.sub_sc_part)
         self._add_born_ns(self.film_sc_part)
-        # self._add_born_ns(self.sub_surface)
-        # self._add_born_ns(self.film_surface)
         self._add_born_ns(self.sub_bulk)
         self._add_born_ns(self.film_bulk)
+
         self._add_r0s(self.iface)
         self._add_r0s(self.sub_sc_part)
         self._add_r0s(self.film_sc_part)
-        # self._add_r0s(self.sub_surface)
-        # self._add_r0s(self.film_surface)
         self._add_r0s(self.sub_bulk)
         self._add_r0s(self.film_bulk)
-        # print(self.sub_part)
-        # print(self.film_part)
-        # self._add_charges(self.iface)
-        # self._add_charges(self.sub_part)
-        # self._add_charges(self.film_part)
+
         self.d_interface = self.interface.interfacial_distance
         self.opt_xy_shift = np.zeros(2)
         self.opt_d_interface = self.d_interface
@@ -113,24 +111,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             is_slab=False,
         )
 
-        # self.sub_surface_inputs = self._generate_base_inputs(
-        #     structure=self.sub_surface,
-        #     is_slab=False,
-        # )
-        # self._get_pseudo_surface_inputs(
-        #     inputs=self.sub_surface_inputs,
-        #     is_film=False,
-        # )
-
-        # self.film_surface_inputs = self._generate_base_inputs(
-        #     structure=self.film_surface,
-        #     is_slab=False,
-        # )
-        # self._get_pseudo_surface_inputs(
-        #     inputs=self.film_surface_inputs,
-        #     is_film=True,
-        # )
-
         (
             self.film_energy,
             self.sub_energy,
@@ -140,11 +120,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             self.sub_surface_energy,
             self.const_iface_energy,
         ) = self._get_const_energies()
-        # print("Sub Total Energy = ", self.sub_energy)
-        # print("Film Total Energy = ", self.film_energy)
-        # print("Film Surface Energy = ", self.film_surface_energy)
-        # print("Sub Surface Energy = ", self.sub_surface_energy)
-        # print("")
 
     def _get_iface_parts(
         self,
@@ -174,20 +149,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return const_inputs, variable_inputs
 
-    # def _get_pseudo_surface_inputs(
-    #     self,
-    #     inputs: Dict[str, np.ndarray],
-    #     is_film: bool = True,
-    # ) -> Dict[str, np.ndarray]:
-    #     if is_film:
-    #         mask = inputs["offsets"][:, -1] >= 0.0
-    #     else:
-    #         mask = inputs["offsets"][:, -1] <= 0.0
-
-    #     for k, v in inputs.items():
-    #         if "idx" in k or "offsets" in k:
-    #             inputs[k] = v[mask]
-
     def get_optimized_structure(self):
         opt_shift = self.opt_xy_shift
 
@@ -214,12 +175,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         self.opt_xy_shift[:2] = 0.0
         self.d_interface = self.opt_d_interface
-
-    # def _add_charges(self, struc):
-    #     charges = [
-    #         self.charge_dict[chemical_symbols[z]] for z in struc.atomic_numbers
-    #     ]
-    #     struc.add_site_property("charges", charges)
 
     def _add_r0s(self, struc):
         r0s = []
@@ -266,26 +221,26 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         sub_guess = sub.composition.oxi_state_guesses()
 
         if len(sub_guess) > 0:
-            oxidation_states.update(sub_guess[0])
+            oxidation_states["sub"] = sub_guess[0]
         else:
             unique_atomic_numbers = np.unique(sub.atomic_numbers)
-            oxidation_states.update(
-                {chemical_symbols[n]: 0 for n in unique_atomic_numbers}
-            )
+            oxidation_states["sub"] = {
+                chemical_symbols[n]: 0 for n in unique_atomic_numbers
+            }
 
         film_guess = film.composition.oxi_state_guesses()
 
         if len(film_guess) > 0:
-            oxidation_states.update(film_guess[0])
+            oxidation_states["film"] = film_guess[0]
         else:
             unique_atomic_numbers = np.unique(film.atomic_numbers)
-            oxidation_states.update(
-                {chemical_symbols[n]: 0 for n in unique_atomic_numbers}
-            )
+            oxidation_states["film"] = {
+                chemical_symbols[n]: 0 for n in unique_atomic_numbers
+            }
 
         return oxidation_states
 
-    def _get_neighborhood_info_old(self, struc, charge_dict):
+    def _get_neighborhood_info_pmg(self, struc, charge_dict):
         struc.add_oxidation_state_by_element(charge_dict)
         Zs = np.unique(struc.atomic_numbers)
         combos = combinations_with_replacement(Zs, 2)
@@ -322,17 +277,17 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             try:
                 d1 = float(Element(s1).ionic_radii[c1])
             except KeyError:
-                print(
-                    f"No ionic radius available for {s1}, using the atomic radius instead"
-                )
+                # print(
+                #     f"No ionic radius available for {s1}, using the atomic radius instead"
+                # )
                 d1 = float(Element(s1).atomic_radius)
 
             try:
                 d2 = float(Element(s2).ionic_radii[c2])
             except KeyError:
-                print(
-                    f"No ionic radius available for {s2}, using the atomic radius instead"
-                )
+                # print(
+                #     f"No ionic radius available for {s2}, using the atomic radius instead"
+                # )
                 d2 = float(Element(s2).atomic_radius)
 
             radius_frac = d1 / (d1 + d2)
@@ -347,9 +302,96 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         mean_radius_dict = {k: np.mean(v) for k, v in ionic_radii_dict.items()}
 
-        return neighbor_dict, mean_radius_dict
+        return mean_radius_dict
 
     def _get_neighborhood_info(self, struc, charge_dict):
+        struc.add_oxidation_state_by_element(charge_dict)
+        Zs = np.unique(struc.atomic_numbers)
+        combos = combinations_with_replacement(Zs, 2)
+        neighbor_dict = {c: None for c in combos}
+
+        neighbor_list = []
+        ionic_radii_dict = {Z: [] for Z in Zs}
+        coordination_dict = {Z: [] for Z in Zs}
+
+        cnn = CrystalNN(search_cutoff=7.0, cation_anion=True)
+        for i, site in enumerate(struc.sites):
+            info_dict = cnn.get_nn_info(struc, i)
+            coordination_dict[site.specie.Z] = len(info_dict)
+            for neighbor in info_dict:
+                frac_diff = site.frac_coords - neighbor["site"].frac_coords
+                dist = np.linalg.norm(
+                    struc.lattice.get_cartesian_coords(frac_diff)
+                )
+                species = tuple(
+                    sorted([site.specie.Z, neighbor["site"].specie.Z])
+                )
+                neighbor_list.append([species, dist])
+
+        sorted_neighbor_list = sorted(neighbor_list, key=lambda x: x[0])
+        groups = groupby(sorted_neighbor_list, key=lambda x: x[0])
+
+        for group in groups:
+            nn = list(zip(*group[1]))[1]
+            neighbor_dict[group[0]] = np.min(nn)
+
+        for n, d in neighbor_dict.items():
+            s1 = chemical_symbols[n[0]]
+            s2 = chemical_symbols[n[1]]
+            c1 = charge_dict[s1]
+            c2 = charge_dict[s2]
+
+            z1_df = self._ionic_radii_df[
+                (self._ionic_radii_df["Atomic Number"] == n[0])
+                & (self._ionic_radii_df["Oxidation State"] == c1)
+            ]
+
+            if len(z1_df) > 0:
+                z1_coords = z1_df["Coordination Number"].values
+                z1_coord_diff = np.abs(z1_coords - coordination_dict[n[0]])
+                z1_coord_mask = z1_coord_diff == z1_coord_diff.min()
+                z1_radii = z1_df[z1_coord_mask]
+
+                if not pd.isna(z1_radii["Shannon"]).any():
+                    d1 = z1_radii["Shannon"].values.mean() / 100
+                else:
+                    d1 = z1_radii["ML Mean"].values.mean() / 100
+            else:
+                d1 = covalent_radii[n[0]]
+
+            z2_df = self._ionic_radii_df[
+                (self._ionic_radii_df["Atomic Number"] == n[1])
+                & (self._ionic_radii_df["Oxidation State"] == c2)
+            ]
+
+            if len(z2_df) > 0:
+                z2_coords = z2_df["Coordination Number"].values
+                z2_coord_diff = np.abs(z2_coords - coordination_dict[n[1]])
+                z2_coord_mask = z2_coord_diff == z2_coord_diff.min()
+                z2_radii = z2_df[z2_coord_mask]
+
+                if not pd.isna(z2_radii["Shannon"]).any():
+                    d2 = z2_radii["Shannon"].values.mean() / 100
+                else:
+                    d2 = z2_radii["ML Mean"].values.mean() / 100
+            else:
+                d2 = covalent_radii[n[1]]
+
+            radius_frac = d1 / (d1 + d2)
+
+            if d is None:
+                neighbor_dict[n] = d1 + d2
+            else:
+                r0_1 = radius_frac * d
+                r0_2 = (1 - radius_frac) * d
+                ionic_radii_dict[n[0]].append(r0_1)
+                ionic_radii_dict[n[1]].append(r0_2)
+
+        mean_radius_dict = {k: np.mean(v) for k, v in ionic_radii_dict.items()}
+
+        return mean_radius_dict
+
+    def _get_neighborhood_info_nn(self, struc, charge_dict):
         atoms = AseAtomsAdaptor().get_atoms(struc)
         atomic_numbers = atoms.get_atomic_numbers()
         unique_atomic_numbers = np.unique(atomic_numbers)
@@ -388,17 +430,17 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             try:
                 d1 = float(Element(s1).ionic_radii[c1])
             except KeyError:
-                print(
-                    f"No ionic radius available for {s1}, using the atomic radius instead"
-                )
+                # print(
+                #     f"No ionic radius available for {s1}, using the atomic radius instead"
+                # )
                 d1 = float(Element(s1).atomic_radius)
 
             try:
                 d2 = float(Element(s2).ionic_radii[c2])
             except KeyError:
-                print(
-                    f"No ionic radius available for {s2}, using the atomic radius instead"
-                )
+                # print(
+                #     f"No ionic radius available for {s2}, using the atomic radius instead"
+                # )
                 d2 = float(Element(s2).atomic_radius)
 
             radius_frac = d1 / (d1 + d2)
@@ -416,8 +458,14 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         return mean_radius_dict
 
     def _get_r0s(self, sub, film, charge_dict):
-        sub_radii_dict = self._get_neighborhood_info(sub, self.charge_dict)
-        film_radii_dict = self._get_neighborhood_info(film, self.charge_dict)
+        sub_radii_dict = self._get_neighborhood_info(
+            sub,
+            self.charge_dict["sub"],
+        )
+        film_radii_dict = self._get_neighborhood_info(
+            film,
+            self.charge_dict["film"],
+        )
 
         r0_dict = {"film": film_radii_dict, "sub": sub_radii_dict}
 
@@ -572,182 +620,3 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             )
 
         return outputs
-
-    # def _calculate_iface_energy(self, inputs: Dict, shifts: np.ndarray):
-    #     ionic_potential = IonicShiftedForcePotential(
-    #         cutoff=self._cutoff,
-    #     )
-    #     outputs = ionic_potential.forward(
-    #         inputs=inputs,
-    #         shift=shifts,
-    #         constant_coulomb_contribution=self.const_coulomb_energy,
-    #         constant_born_contribution=self.const_born_energy,
-    #         # r0_array=self.r0_array,
-    #     )
-
-    #     return outputs
-
-    # def _run_bulk(
-    #     self,
-    #     strains,
-    #     fontsize: int = 12,
-    #     output: str = "PES.png",
-    #     show_born_and_coulomb: bool = False,
-    #     dpi: int = 400,
-    # ):
-    #     # sub = self.interface.substrate.bulk_structure
-    #     sub = self.interface.film.bulk_structure
-    #     is_film = True
-
-    #     strained_atoms = []
-    #     for strain in strains:
-    #         strain_struc = sub.copy()
-    #         strain_struc.apply_strain(strain)
-    #         strain_struc.add_site_property(
-    #             "is_film", [is_film] * len(strain_struc)
-    #         )
-    #         self._add_charges(strain_struc)
-    #         self._add_born_ns(strain_struc)
-    #         strained_atoms.append(strain_struc)
-
-    #     total_energy = []
-    #     coulomb = []
-    #     born = []
-    #     for i, atoms in enumerate(strained_atoms):
-    #         inputs = self._generate_base_inputs(
-    #             structure=atoms,
-    #         )
-    #         batch_inputs = create_batch(inputs, 1)
-
-    #         (
-    #             _total_energy,
-    #             _coulomb,
-    #             _born,
-    #             _,
-    #             _,
-    #         ) = self._calculate(batch_inputs, shifts=np.zeros((1, 3)))
-    #         total_energy.append(_total_energy)
-    #         coulomb.append(_coulomb)
-    #         born.append(_born)
-
-    #     total_energy = np.array(total_energy)
-    #     coulomb = np.array(coulomb)
-    #     born = np.array(born)
-
-    #     fig, axs = plt.subplots(figsize=(4 * 3, 3), dpi=dpi, ncols=3)
-    #     print("Min Strain:", strains[np.argmin(total_energy)])
-
-    #     axs[0].plot(
-    #         strains,
-    #         total_energy,
-    #         color="black",
-    #         linewidth=1,
-    #         label="Born+Coulomb",
-    #     )
-    #     axs[1].plot(
-    #         strains,
-    #         coulomb,
-    #         color="red",
-    #         linewidth=1,
-    #         label="Coulomb",
-    #     )
-    #     axs[2].plot(
-    #         strains,
-    #         born,
-    #         color="blue",
-    #         linewidth=1,
-    #         label="Born",
-    #     )
-
-    #     for ax in axs:
-    #         ax.tick_params(labelsize=fontsize)
-    #         ax.set_ylabel("Energy", fontsize=fontsize)
-    #         ax.set_xlabel("Strain ($\\AA$)", fontsize=fontsize)
-    #         ax.legend(fontsize=12)
-
-    #     fig.tight_layout()
-    #     fig.savefig(output, bbox_inches="tight")
-    #     plt.close(fig)
-
-    # def _run_scale(
-    #     self,
-    #     scales,
-    #     fontsize: int = 12,
-    #     output: str = "scale.png",
-    #     show_born_and_coulomb: bool = False,
-    #     dpi: int = 400,
-    # ):
-    #     # sub = self.interface.substrate.bulk_structure
-    #     sub = self.interface.film.bulk_structure
-
-    #     strains = np.linspace(-0.1, 0.1, 21)
-    #     strained_atoms = []
-    #     # for strain in [-0.02, -0.01, 0.0, 0.01, 0.02]:
-    #     for strain in strains:
-    #         strain_struc = sub.copy()
-    #         strain_struc.apply_strain(strain)
-    #         strain_atoms = AseAtomsAdaptor().get_atoms(strain_struc)
-    #         strain_atoms.set_array(
-    #             "is_film", np.zeros(len(strain_atoms)).astype(bool)
-    #         )
-    #         strained_atoms.append(strain_atoms)
-
-    #     total_energy = []
-    #     for scale in scales:
-    #         strain_energy = []
-    #         for atoms in strained_atoms:
-    #             inputs = self._generate_inputs(
-    #                 atoms=atoms, shifts=[np.zeros(3)], interface=False
-    #             )
-    #             ionic_potential = IonicShiftedForcePotential(
-    #                 cutoff=self._cutoff,
-    #             )
-    #             (_total_energy, _, _, _, _,) = ionic_potential.forward(
-    #                 inputs=inputs,
-    #                 r0_dict=scale * self.r0_array,
-    #                 ns_dict=self.ns_dict,
-    #                 z_shift=False,
-    #             )
-    #             strain_energy.append(_total_energy)
-    #         total_energy.append(strain_energy)
-
-    #     total_energy = np.array(total_energy)
-    #     # coulomb = np.array(coulomb)
-    #     # born = np.array(born)
-
-    #     fig, axs = plt.subplots(figsize=(6, 3), dpi=dpi, ncols=2)
-
-    #     colors = plt.cm.jet
-    #     color_list = [colors(i) for i in np.linspace(0, 1, len(total_energy))]
-
-    #     min_strains = []
-    #     min_Es = []
-    #     for i, E in enumerate(total_energy):
-    #         E -= E.min()
-    #         E /= E.max()
-    #         axs[0].plot(
-    #             strains,
-    #             E,
-    #             color=color_list[i],
-    #             linewidth=1,
-    #             # marker=".",
-    #             # alpha=0.3,
-    #         )
-    #         min_strain = strains[np.argmin(E)]
-    #         min_E = E.min()
-    #         min_strains.append(min_strain)
-    #         min_Es.append(min_E)
-    #         axs[0].scatter(
-    #             [min_strain],
-    #             [min_E],
-    #             c=[color_list[i]],
-    #             s=2,
-    #         )
-
-    #     axs[1].plot(
-    #         scales, np.array(min_strains) ** 2, color="black", marker="."
-    #     )
-
-    #     fig.tight_layout()
-    #     fig.savefig(output, bbox_inches="tight")
-    #     plt.close(fig)

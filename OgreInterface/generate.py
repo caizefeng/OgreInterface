@@ -1,41 +1,35 @@
 """
 This module will be used to construct the surfaces and interfaces used in this package.
 """
-from OgreInterface.surfaces import (
-    Surface,
-    Interface,
-)
-from OgreInterface import utils
-from OgreInterface.lattice_match import ZurMcGill, OgreMatch
+from copy import deepcopy
+from typing import Union, List, TypeVar, Tuple, Dict, Optional
+from itertools import combinations, product, groupby
+from collections.abc import Sequence
+import math
 
-from pymatgen.core.structure import Structure, Molecule
-from pymatgen.core.periodic_table import Element, DummySpecies
+
+from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
-from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.core.operations import SymmOp
 from pymatgen.analysis.graphs import StructureGraph
 from pymatgen.analysis.local_env import JmolNN, CrystalNN
+from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.spatial.distance import squareform
+from ase import Atoms
+from tqdm import tqdm
 import networkx as nx
 import numpy as np
 import spglib
 
 
-from tqdm import tqdm
-import numpy as np
-import math
-from copy import deepcopy
-from typing import Union, List, TypeVar, Tuple, Dict, Optional
-from itertools import combinations, product, groupby
-from ase import Atoms
-from ase.data import chemical_symbols
-from multiprocessing import Pool, cpu_count
-import time
-from collections.abc import Sequence
-
-from scipy.cluster.hierarchy import fcluster, linkage
-from scipy.spatial.distance import squareform
+from OgreInterface.surfaces import (
+    Surface,
+    Interface,
+)
+from OgreInterface import utils
+from OgreInterface.lattice_match import ZurMcGill
 
 SelfSurfaceGenerator = TypeVar(
     "SelfSurfaceGenerator", bound="SurfaceGenerator"
@@ -1333,12 +1327,12 @@ class InterfaceGenerator:
         substrate: Union[Surface, Interface],
         film: Union[Surface, Interface],
         max_area_mismatch: float = 0.01,
-        max_angle_strain: float = 0.01,
-        max_linear_strain: float = 0.01,
-        max_area: float = 500.0,
-        interfacial_distance: Union[float, None] = 2.0,
+        max_strain: float = 0.01,
+        max_area: Optional[float] = None,
+        interfacial_distance: Optional[float] = 2.0,
         vacuum: float = 40.0,
         center: bool = False,
+        substrate_strain_fraction: float = 0.0,
     ):
         if type(substrate) == Surface or type(substrate) == Interface:
             self.substrate = substrate
@@ -1355,9 +1349,9 @@ class InterfaceGenerator:
             )
 
         self.center = center
+        self._substrate_strain_fraction = substrate_strain_fraction
         self.max_area_mismatch = max_area_mismatch
-        self.max_angle_strain = max_angle_strain
-        self.max_linear_strain = max_linear_strain
+        self.max_strain = max_strain
         self.max_area = max_area
         self.interfacial_distance = interfacial_distance
         self.vacuum = vacuum
@@ -1380,8 +1374,7 @@ class InterfaceGenerator:
             film_basis=self.film.uvw_basis,
             substrate_basis=self.substrate.uvw_basis,
             max_area=self.max_area,
-            max_linear_strain=self.max_linear_strain,
-            max_angle_strain=self.max_angle_strain,
+            max_strain=self.max_strain,
             max_area_mismatch=self.max_area_mismatch,
         )
         match_list = zm.run(return_all=True)
@@ -1466,9 +1459,9 @@ class InterfaceGenerator:
             sorted_matches = sorted(
                 unique_matches,
                 key=lambda x: (
-                    x.area,
-                    np.max(np.abs(x.linear_strain)),
-                    np.abs(x.angle_strain),
+                    round(x.area, 6),
+                    round(x.strain, 6),
+                    round(x._rotation_distortion, 6),
                 ),
             )
 
@@ -1537,6 +1530,7 @@ class InterfaceGenerator:
             match=match,
             vacuum=self.vacuum,
             center=self.center,
+            substrate_strain_fraction=self._substrate_strain_fraction,
         )
         return interface
 
@@ -1551,7 +1545,9 @@ class InterfaceGenerator:
 
         interfaces = []
 
-        print("Generating Interfaces:")
+        print(
+            f"Generating Interfaces for Film ({self.film.termination_index}) and Substrate ({self.substrate.termination_index}):"
+        )
         for match in tqdm(self.match_list, dynamic_ncols=True):
             interface = Interface(
                 substrate=self.substrate,
@@ -1560,6 +1556,7 @@ class InterfaceGenerator:
                 match=match,
                 vacuum=self.vacuum,
                 center=self.center,
+                substrate_strain_fraction=self._substrate_strain_fraction,
             )
             interfaces.append(interface)
 

@@ -1,19 +1,12 @@
 import numpy as np
-from typing import List, Tuple, Iterable, Union
+from typing import List, Tuple, Iterable, Union, Optional
 from dataclasses import dataclass
 
 
 @dataclass
 class OgreMatch:
     area: float
-    substrate_a_norm: float
-    substrate_b_norm: float
-    substrate_angle: float
-    film_a_norm: float
-    film_b_norm: float
-    film_angle: float
-    linear_strain: np.ndarray
-    angle_strain: float
+    strain: float
     film_vectors: np.ndarray
     film_sl_vectors: np.ndarray
     film_zur_mcgill_transform: np.ndarray
@@ -22,10 +15,15 @@ class OgreMatch:
     substrate_sl_vectors: np.ndarray
     substrate_zur_mcgill_transform: np.ndarray
     substrate_sl_transform: np.ndarray
+    substrate_basis: np.ndarray
     substrate_sl_basis: np.ndarray
     substrate_sl_scale_factors: np.ndarray
+    film_basis: np.ndarray
     film_sl_basis: np.ndarray
     film_sl_scale_factors: np.ndarray
+    substrate_align_transform: np.ndarray
+    film_align_transform: np.ndarray
+    film_to_substrate_strain_transform: np.ndarray
 
     @property
     def sort_key(self):
@@ -39,6 +37,30 @@ class OgreMatch:
         )
         return tuple(key)
 
+    @property
+    def _rotation_distortion(self):
+        film_deviation = np.linalg.norm(
+            (
+                np.sqrt(np.linalg.det(self.film_sl_transform[:2, :2]))
+                * np.eye(2)
+            )
+            - self.film_sl_transform[:2, :2]
+        )
+
+        substrate_deviation = np.linalg.norm(
+            (
+                np.sqrt(np.linalg.det(self.substrate_sl_transform[:2, :2]))
+                * np.eye(2)
+            )
+            - self.substrate_sl_transform[:2, :2]
+        )
+
+        total_distortion = np.linalg.norm(
+            [film_deviation, substrate_deviation]
+        )
+
+        return total_distortion
+
 
 class ZurMcGill:
     def __init__(
@@ -47,22 +69,25 @@ class ZurMcGill:
         film_basis: np.ndarray,
         substrate_vectors: np.ndarray,
         substrate_basis: np.ndarray,
-        max_area: float = 400.0,
-        max_linear_strain: float = 0.01,
-        max_angle_strain: float = 0.01,
+        max_area: Optional[float] = None,
+        max_strain: float = 0.01,
         max_area_mismatch: float = 0.01,
     ) -> None:
         self.film_vectors = film_vectors
         self.film_basis = film_basis
         self.substrate_vectors = substrate_vectors
         self.substrate_basis = substrate_basis
-        self.max_area = max_area
-        self.max_linear_strain = max_linear_strain
-        self.max_angle_strain = max_angle_strain
+        self.max_strain = max_strain
         self.max_area_mismatch = max_area_mismatch
 
         self.film_area = self._get_area(self.film_vectors)
         self.substrate_area = self._get_area(self.substrate_vectors)
+
+        if max_area is None:
+            self.max_area = 4.1 * max(self.film_area, self.substrate_area)
+        else:
+            self.max_area = max_area
+
         self.area_ratio = self.film_area / self.substrate_area
         self.film_rs, self.substrate_rs = self._get_rs()
 
@@ -70,9 +95,11 @@ class ZurMcGill:
         return np.linalg.norm(np.cross(vectors[0], vectors[1]))
 
     def _get_rs(self) -> Iterable[np.ndarray]:
-        film_rs = np.arange(1, self.max_area // self.film_area).astype(int)
+        film_rs = np.arange(1, (self.max_area // self.film_area) + 1).astype(
+            int
+        )
         substrate_rs = np.arange(
-            1, self.max_area // self.substrate_area
+            1, (self.max_area // self.substrate_area) + 1
         ).astype(int)
 
         return film_rs, substrate_rs
@@ -97,17 +124,12 @@ class ZurMcGill:
             )
 
             (
-                eq_a_strain,
-                eq_b_strain,
-                eq_angle_strain,
+                eq_strains,
                 eq_film_inds,
                 eq_sub_inds,
-                eq_sub_a_norm,
-                eq_sub_b_norm,
-                eq_sub_angle,
-                eq_film_a_norm,
-                eq_film_b_norm,
-                eq_film_angle,
+                eq_sub_align_transforms,
+                eq_film_align_transforms,
+                eq_strain_transforms,
             ) = self._is_same(
                 film_vectors=reduced_film_sl_vectors,
                 sub_vectors=reduced_sub_sl_vectors,
@@ -115,7 +137,6 @@ class ZurMcGill:
             n_matches = len(eq_film_inds)
 
             if n_matches > 0:
-                strains = np.c_[eq_a_strain, eq_b_strain]
                 eq_film_transforms = film_transforms[eq_film_inds]
                 eq_sub_transforms = sub_transforms[eq_sub_inds]
                 eq_reduced_film_sl_vectors = reduced_film_sl_vectors[
@@ -166,18 +187,18 @@ class ZurMcGill:
                 )
                 total_sub_transforms[:, :2, :2] = eq_total_sub_transforms_2d
 
+                total_strain_transforms = np.repeat(
+                    np.eye(3).reshape(1, 3, 3),
+                    n_matches,
+                    axis=0,
+                )
+                total_strain_transforms[:, :2, :2] = eq_strain_transforms
+
                 same_area_matches = []
                 for i in range(n_matches):
                     match = OgreMatch(
                         area=eq_areas[i],
-                        substrate_a_norm=eq_sub_a_norm[i],
-                        substrate_b_norm=eq_sub_b_norm[i],
-                        substrate_angle=eq_sub_angle[i],
-                        film_a_norm=eq_film_a_norm[i],
-                        film_b_norm=eq_film_b_norm[i],
-                        film_angle=eq_film_angle[i],
-                        linear_strain=strains[i],
-                        angle_strain=eq_angle_strain[i],
+                        strain=eq_strains[i],
                         film_vectors=self.film_vectors,
                         film_sl_vectors=eq_reduced_film_sl_vectors[i],
                         film_zur_mcgill_transform=eq_film_transforms[i],
@@ -186,10 +207,17 @@ class ZurMcGill:
                         substrate_sl_vectors=eq_reduced_sub_sl_vectors[i],
                         substrate_zur_mcgill_transform=eq_sub_transforms[i],
                         substrate_sl_transform=total_sub_transforms[i],
+                        substrate_basis=self.substrate_basis,
                         substrate_sl_basis=sub_sl_basis[i],
                         substrate_sl_scale_factors=sub_sl_scale_factors[i],
+                        film_basis=self.film_basis,
                         film_sl_basis=film_sl_basis[i],
                         film_sl_scale_factors=film_sl_scale_factors[i],
+                        substrate_align_transform=eq_sub_align_transforms[i],
+                        film_align_transform=eq_film_align_transforms[i],
+                        film_to_substrate_strain_transform=total_strain_transforms[
+                            i
+                        ],
                     )
                     same_area_matches.append(match)
 
@@ -200,53 +228,89 @@ class ZurMcGill:
 
         sorted_matches = sorted(
             matches,
-            key=lambda x: (x.area, max(x.linear_strain), x.angle_strain),
+            key=lambda x: (x.area, x.strain),
         )
 
         return sorted_matches
 
-    # def _2d_inv(self, vectors):
-    #     vecs_2d = vectors[:, :, :2]
-    #     dets = np.linalg.det(vecs_2d)
-    #     adj = np.c_[
-    #         vecs_2d[:, 1, 1],
-    #         -vecs_2d[:, 0, 1],
-    #         -vecs_2d[:, 1, 0],
-    #         vecs_2d[:, 0, 0],
-    #     ].reshape(-1, 2, 2)
+    def _2d_inv(self, vectors):
+        vecs_2d = vectors[:, :, :2]
+        dets = np.linalg.det(vecs_2d)
+        adj = np.c_[
+            vecs_2d[:, 1, 1],
+            -vecs_2d[:, 0, 1],
+            -vecs_2d[:, 1, 0],
+            vecs_2d[:, 0, 0],
+        ].reshape(-1, 2, 2)
 
-    #     inv = (1 / dets)[:, None, None] * adj
+        inv = (1 / dets)[:, None, None] * adj
 
-    #     return inv
+        return inv
 
-    # def _build_a_to_i(self, vectors, a_norms) -> np.ndarray:
-    #     a_vecs = vectors[:, 0]
-    #     a_norm = a_vecs / a_norms[:, None]
-    #     a_to_i = np.c_[
-    #         a_norm[:, 0],
-    #         -a_norm[:, 1],
-    #         np.zeros(a_norms.shape),
-    #         a_norm[:, 1],
-    #         a_norm[:, 0],
-    #         np.zeros(a_norms.shape),
-    #         np.zeros(a_norms.shape),
-    #         np.zeros(a_norms.shape),
-    #         np.ones(a_norms.shape),
-    #     ].reshape(-1, 3, 3)
+    def _build_a_to_i(self, vectors, a_norms) -> np.ndarray:
+        a_vecs = vectors[:, 0]
+        a_norm = a_vecs / a_norms[:, None]
+        a_to_i = np.c_[
+            a_norm[:, 0],
+            -a_norm[:, 1],
+            np.zeros(a_norms.shape),
+            a_norm[:, 1],
+            a_norm[:, 0],
+            np.zeros(a_norms.shape),
+            np.zeros(a_norms.shape),
+            np.zeros(a_norms.shape),
+            np.ones(a_norms.shape),
+        ].reshape(-1, 3, 3)
 
-    #     return a_to_i
+        return a_to_i
+
+    def _apply_a_to_i_rotation(
+        self,
+        vectors: np.ndarray,
+        a_to_i_transforms: np.ndarray,
+    ) -> np.ndarray:
+        aligned_vectors = np.einsum("...ij,...jk", vectors, a_to_i_transforms)
+
+        return aligned_vectors
+
+    def _get_strain_transformation(
+        self,
+        film_inverse_vectors: np.ndarray,
+        substrate_vectors: np.ndarray,
+    ) -> np.ndarray:
+
+        transformations = np.einsum(
+            "...ij,...jk",
+            film_inverse_vectors,
+            substrate_vectors,
+        )
+
+        return transformations
 
     def _is_same(
         self, film_vectors: np.ndarray, sub_vectors: np.ndarray
     ) -> Iterable[np.ndarray]:
         film_a_norm = self._vec_norm(film_vectors[:, 0])
-        film_b_norm = self._vec_norm(film_vectors[:, 1])
-
         sub_a_norm = self._vec_norm(sub_vectors[:, 0])
-        sub_b_norm = self._vec_norm(sub_vectors[:, 1])
 
-        sub_angle = self._vec_angle(sub_vectors[:, 0], sub_vectors[:, 1])
-        film_angle = self._vec_angle(film_vectors[:, 0], film_vectors[:, 1])
+        film_a_to_i_transform = self._build_a_to_i(
+            vectors=film_vectors,
+            a_norms=film_a_norm,
+        )
+        sub_a_to_i_transform = self._build_a_to_i(
+            vectors=sub_vectors,
+            a_norms=sub_a_norm,
+        )
+
+        aligned_film_vectors = self._apply_a_to_i_rotation(
+            vectors=film_vectors,
+            a_to_i_transforms=film_a_to_i_transform,
+        )
+
+        aligned_sub_vectors = self._apply_a_to_i_rotation(
+            vectors=sub_vectors,
+            a_to_i_transforms=sub_a_to_i_transform,
+        )
 
         X, Y = np.meshgrid(range(len(film_a_norm)), range(len(sub_a_norm)))
         product_inds = np.c_[X.ravel(), Y.ravel()]
@@ -254,46 +318,48 @@ class ZurMcGill:
         film_inds = product_inds[:, 0]
         sub_inds = product_inds[:, 1]
 
-        a_strain = (film_a_norm[film_inds] / sub_a_norm[sub_inds]) - 1
-        b_strain = (film_b_norm[film_inds] / sub_b_norm[sub_inds]) - 1
-        angle_strain = (film_angle[film_inds] / sub_angle[sub_inds]) - 1
-        a_same = np.round(np.abs(a_strain), 3) <= self.max_linear_strain
-        b_same = np.round(np.abs(b_strain), 3) <= self.max_linear_strain
-        ab_angle_same = (
-            np.round(np.abs(angle_strain), 3) <= self.max_angle_strain
+        film_inverse_2d_vectors = self._2d_inv(vectors=aligned_film_vectors)
+
+        strain_transformations = self._get_strain_transformation(
+            film_inverse_vectors=film_inverse_2d_vectors[film_inds],
+            substrate_vectors=aligned_sub_vectors[sub_inds][:, :, :2],
         )
 
-        is_equal = np.c_[a_same, b_same, ab_angle_same].all(axis=1)
+        identities = np.repeat(
+            np.eye(2).reshape(-1, 2, 2), repeats=len(film_inds), axis=0
+        )
 
-        eq_a_strain = a_strain[is_equal]
-        eq_b_strain = b_strain[is_equal]
-        eq_angle_strain = angle_strain[is_equal]
+        strain = self._matrix_norm(
+            matrices=(identities - strain_transformations)
+        )
+
+        is_equal = np.round(strain, 5) <= self.max_strain
+
+        eq_strain = strain[is_equal]
         eq_film_inds = film_inds[is_equal]
         eq_sub_inds = sub_inds[is_equal]
-        eq_sub_a_norm = sub_a_norm[eq_sub_inds]
-        eq_sub_b_norm = sub_b_norm[eq_sub_inds]
-        eq_sub_angle = sub_angle[eq_sub_inds]
-        eq_film_a_norm = film_a_norm[eq_film_inds]
-        eq_film_b_norm = film_b_norm[eq_film_inds]
-        eq_film_angle = film_angle[eq_film_inds]
+        eq_sub_align_transform = sub_a_to_i_transform[eq_sub_inds]
+        eq_film_align_transform = film_a_to_i_transform[eq_film_inds]
+        eq_strain_transform = strain_transformations[is_equal]
 
         return (
-            eq_a_strain,
-            eq_b_strain,
-            eq_angle_strain,
+            eq_strain,
             eq_film_inds,
             eq_sub_inds,
-            eq_sub_a_norm,
-            eq_sub_b_norm,
-            eq_sub_angle,
-            eq_film_a_norm,
-            eq_film_b_norm,
-            eq_film_angle,
+            eq_sub_align_transform,
+            eq_film_align_transform,
+            eq_strain_transform,
         )
 
     def _vec_norm(self, vecs: np.ndarray) -> np.ndarray:
         dot_str = "ij,ij->i"
         norms = np.sqrt(np.einsum(dot_str, vecs, vecs))
+
+        return norms
+
+    def _matrix_norm(self, matrices: np.ndarray) -> np.ndarray:
+        dot_str = "ijk,ijk->i"
+        norms = np.sqrt(np.einsum(dot_str, matrices, matrices))
 
         return norms
 

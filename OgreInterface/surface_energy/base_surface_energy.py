@@ -1,28 +1,13 @@
-from OgreInterface.surfaces import Interface, Surface
-from OgreInterface.score_function.generate_inputs import (
+from typing import List
+
+from pymatgen.core.structure import Structure
+
+from OgreInterface.surfaces import Surface
+from OgreInterface.score_function import (
     generate_input_dict,
     create_batch,
 )
 from OgreInterface import utils
-from typing import List
-import numpy as np
-from matplotlib.colors import Normalize, ListedColormap
-import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from matplotlib.patches import Polygon
-from scipy.interpolate import RectBivariateSpline, CubicSpline
-from copy import deepcopy
-import torch
-from pymatgen.core.structure import Structure
-from pymatgen.core.lattice import Lattice
-from pymatgen.core.periodic_table import Element
-from pymatgen.symmetry.analyzer import SymmOp, SpacegroupAnalyzer
-from pymatgen.io.vasp.inputs import Poscar
-from ase.data import chemical_symbols
-import itertools
-import time
-from pyswarms.single.global_best import GlobalBestPSO
-import os
 
 
 class BaseSurfaceEnergy:
