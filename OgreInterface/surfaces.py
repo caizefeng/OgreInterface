@@ -1758,7 +1758,6 @@ class Interface:
             relaxed_ref = relaxed_structure[ref_ind].coords
 
             for i in relaxed_inds:
-                init_ind = unrelaxed_structure[i].properties["orig_ind"]
                 relaxed_coords = relaxed_structure[i].coords
                 relaxed_coords -= relaxed_ref
                 unrelaxed_coords = unrelaxed_structure[i].coords
@@ -1770,7 +1769,7 @@ class Interface:
                 )
                 center_ind = np.argmin(dists)
                 bond = all_relaxed_coords[center_ind] - unrelaxed_coords
-                relaxation_shifts[init_ind] = bond
+                relaxation_shifts[i] = bond
 
             return relaxation_shifts
         else:
