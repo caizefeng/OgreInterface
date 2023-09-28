@@ -853,7 +853,7 @@ def plot_match(
     )
 
     fig.tight_layout(pad=0.5)
-    fig.savefig(output)
+    fig.savefig(output, transparent=False)
 
     if not show_in_colab:
         plt.close(fig)

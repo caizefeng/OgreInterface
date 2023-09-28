@@ -448,6 +448,6 @@ class IonicInterfaceSearch:
         )
 
         fig.tight_layout(pad=0.5)
-        fig.savefig(join(base_dir, "opt_energies.png"))
+        fig.savefig(join(base_dir, "opt_energies.png"), transparent=False)
 
         plt.close(fig=fig)

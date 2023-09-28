@@ -354,7 +354,7 @@ class BaseSurfaceMatcher:
         ax.set_aspect("equal")
 
         fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
+        fig.savefig(output, bbox_inches="tight", transparent=False)
         plt.close(fig)
 
         return max_Z
@@ -444,7 +444,7 @@ class BaseSurfaceMatcher:
         axs.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
 
         fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
+        fig.savefig(output, bbox_inches="tight", transparent=False)
         plt.close(fig)
 
         return opt_E
@@ -793,7 +793,7 @@ class BaseSurfaceMatcher:
         ax.set_aspect("equal")
 
         fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
+        fig.savefig(output, bbox_inches="tight", transparent=False)
         plt.close(fig)
 
         return max_Z
@@ -914,7 +914,7 @@ class BaseSurfaceMatcher:
         axs.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
 
         fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
+        fig.savefig(output, bbox_inches="tight", transparent=False)
         plt.close(fig)
 
         return opt_E

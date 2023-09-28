@@ -467,7 +467,7 @@ class MillerSearch(object):
 
         ax.set_aspect("equal")
         fig.tight_layout(pad=0.4)
-        fig.savefig(output, bbox_inches="tight")
+        fig.savefig(output, bbox_inches="tight", transparent=False)
 
         if not show_in_colab:
             plt.close(fig)
