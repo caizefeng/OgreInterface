@@ -4,17 +4,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from OgreInterface.generate import SurfaceGenerator
-# from OgreInterface.generate import InterfaceGenerator, SurfaceGenerator
-# from OgreInterface.surfaces import Surface
-# from OgreInterface.surface_match import IonicSurfaceMatcher
-# from OgreInterface import utils
-# from pymatgen.core.structure import Structure
-# from pymatgen.io.vasp.inputs import Poscar
-# from pymatgen.core.periodic_table import Element
-# from pymatgen.analysis.local_env import CrystalNN
-# from ase.data import chemical_symbols, atomic_numbers
-# from scipy.interpolate import CubicSpline
-# from scipy.integrate import cumtrapz
+
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict
@@ -24,8 +14,6 @@ from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from typing import Tuple, Union, List, Dict
 import itertools
-
-# import utils
 
 
 def _get_triangle(
@@ -57,6 +45,7 @@ def _get_triangle(
         closed=True,
         fc=color,
         ec=(1, 1, 1, 0),
+        zorder=1,
     )
 
     return poly
@@ -100,7 +89,7 @@ def plot_surface_charge_matrix(
     x_size = 4
     y_size = 4
 
-    ratio = len(film_surface_charges) / len(substrate_surface_charges)
+    ratio = len(substrate_surface_charges) / len(film_surface_charges)
 
     if ratio < 1:
         fig_x_size = x_size
@@ -117,25 +106,32 @@ def plot_surface_charge_matrix(
     fontsize = 14
 
     ax.tick_params(labelsize=fontsize)
-    ax.set_xlabel("Film Termination Index", fontsize=fontsize)
-    ax.set_ylabel("Substrate Termination Index", fontsize=fontsize)
+    ax.set_xlabel("Substrate Termination Index", fontsize=fontsize)
+    ax.set_ylabel("Film Termination Index", fontsize=fontsize)
 
-    cmap_max = np.abs(
-        np.concatenate([film_surface_charges, substrate_surface_charges])
-    ).max()
+    cmap_max = max(
+        1,
+        np.ceil(
+            np.abs(
+                np.concatenate(
+                    [film_surface_charges, substrate_surface_charges]
+                )
+            ).max()
+        ),
+    )
 
     cmap = cm.get_cmap("bwr")
     norm = Normalize(vmin=-cmap_max, vmax=cmap_max)
 
     color_mapper = cm.ScalarMappable(norm=norm, cmap=cmap)
 
-    inds = itertools.product(range(len(films)), range(len(substrates)))
+    inds = itertools.product(range(len(substrates)), range(len(films)))
 
     bad_inds = []
 
     for ind in inds:
-        film_ind = ind[0]
-        sub_ind = ind[1]
+        film_ind = ind[1]
+        sub_ind = ind[0]
 
         film_charge = film_surface_charges[film_ind]
         sub_charge = substrate_surface_charges[sub_ind]
@@ -156,6 +152,13 @@ def plot_surface_charge_matrix(
 
         ax.add_patch(film_tri)
         ax.add_patch(sub_tri)
+
+        ax.plot(
+            [sub_ind, sub_ind + 1],
+            [film_ind, film_ind + 1],
+            color="black",
+            zorder=20,
+        )
 
         if -1.0 < film_charge < 1.0:
             film_sign = 0.0
@@ -179,20 +182,28 @@ def plot_surface_charge_matrix(
         #     ax.add_patch(rect)
 
     for i in range(len(film_surface_charges)):
-        ax.axvline(i, color="black")
+        ax.axhline(
+            i,
+            color="black",
+            zorder=20,
+        )
 
     for i in range(len(substrate_surface_charges)):
-        ax.axhline(i, color="black")
+        ax.axvline(
+            i,
+            color="black",
+            zorder=20,
+        )
 
-    ax.set_xlim(0, len(film_surface_charges))
-    ax.set_ylim(0, len(substrate_surface_charges))
+    ax.set_xlim(0, len(substrate_surface_charges))
+    ax.set_ylim(0, len(film_surface_charges))
 
-    ax.set_xticks(
+    ax.set_yticks(
         ticks=np.arange(len(film_surface_charges)) + 0.5,
         labels=[str(i) for i in range(len(film_surface_charges))],
     )
 
-    ax.set_yticks(
+    ax.set_xticks(
         ticks=np.arange(len(substrate_surface_charges)) + 0.5,
         labels=[str(i) for i in range(len(substrate_surface_charges))],
     )
@@ -205,7 +216,7 @@ def plot_surface_charge_matrix(
         orientation="vertical",
     )
     cbar.ax.tick_params(labelsize=fontsize)
-    cbar.ax.locator_params(nbins=5)
+    cbar.ax.locator_params(nbins=(2 * cmap_max) + 1)
 
     cbar.set_label(
         "Residual Surface Charge (Film/Substrate)",
@@ -236,4 +247,8 @@ def plot_surface_charge_matrix(
 
     ax.set_aspect("equal")
     fig.tight_layout(pad=0.4)
-    fig.savefig(output)
+    fig.savefig(
+        output,
+        bbox_inches="tight",
+        transparent=False,
+    )

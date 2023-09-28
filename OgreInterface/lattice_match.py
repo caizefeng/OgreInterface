@@ -41,7 +41,7 @@ class OgreMatch:
     def _rotation_distortion(self):
         film_deviation = np.linalg.norm(
             (
-                np.sqrt(np.linalg.det(self.film_sl_transform[:2, :2]))
+                np.sqrt(np.abs(np.linalg.det(self.film_sl_transform[:2, :2])))
                 * np.eye(2)
             )
             - self.film_sl_transform[:2, :2]
@@ -49,7 +49,9 @@ class OgreMatch:
 
         substrate_deviation = np.linalg.norm(
             (
-                np.sqrt(np.linalg.det(self.substrate_sl_transform[:2, :2]))
+                np.sqrt(
+                    np.abs(np.linalg.det(self.substrate_sl_transform[:2, :2]))
+                )
                 * np.eye(2)
             )
             - self.substrate_sl_transform[:2, :2]
@@ -71,14 +73,18 @@ class ZurMcGill:
         substrate_basis: np.ndarray,
         max_area: Optional[float] = None,
         max_strain: float = 0.01,
-        max_area_mismatch: float = 0.01,
+        max_area_mismatch: Optional[float] = None,
     ) -> None:
         self.film_vectors = film_vectors
         self.film_basis = film_basis
         self.substrate_vectors = substrate_vectors
         self.substrate_basis = substrate_basis
         self.max_strain = max_strain
-        self.max_area_mismatch = max_area_mismatch
+
+        if max_area_mismatch is None:
+            self.max_area_mismatch = max_strain
+        else:
+            self.max_area_mismatch = max_area_mismatch
 
         self.film_area = self._get_area(self.film_vectors)
         self.substrate_area = self._get_area(self.substrate_vectors)
@@ -278,7 +284,6 @@ class ZurMcGill:
         film_inverse_vectors: np.ndarray,
         substrate_vectors: np.ndarray,
     ) -> np.ndarray:
-
         transformations = np.einsum(
             "...ij,...jk",
             film_inverse_vectors,
@@ -329,7 +334,7 @@ class ZurMcGill:
             np.eye(2).reshape(-1, 2, 2), repeats=len(film_inds), axis=0
         )
 
-        strain = self._matrix_norm(
+        strain = (1 / np.sqrt(2)) * self._matrix_norm(
             matrices=(identities - strain_transformations)
         )
 

@@ -63,20 +63,21 @@ class MillerSearch(object):
         film: Union[Structure, Atoms, str],
         max_substrate_index: int = 1,
         max_film_index: int = 1,
-        max_area_mismatch: float = 0.01,
         max_strain: float = 0.01,
+        max_area_mismatch: Optional[float] = None,
         max_area: Optional[float] = None,
         refine_structure: bool = True,
         suppress_warnings: bool = False,
     ) -> None:
         self.refine_structure = refine_structure
         self._suppress_warnings = suppress_warnings
-        if type(substrate) == str:
+
+        if type(substrate) is str:
             self.substrate, _ = self._get_bulk(Structure.from_file(substrate))
         else:
             self.substrate, _ = self._get_bulk(substrate)
 
-        if type(film) == str:
+        if type(film) is str:
             self.film, _ = self._get_bulk(Structure.from_file(film))
         else:
             self.film, _ = self._get_bulk(film)
@@ -98,9 +99,9 @@ class MillerSearch(object):
         self._area_data = None
 
     def _get_bulk(self, atoms_or_struc):
-        if type(atoms_or_struc) == Atoms:
+        if type(atoms_or_struc) is Atoms:
             init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
-        elif type(atoms_or_struc) == Structure:
+        elif type(atoms_or_struc) is Structure:
             init_structure = atoms_or_struc
         else:
             raise TypeError(

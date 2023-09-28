@@ -548,10 +548,10 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         N_sub_layers = self.interface.substrate.layers
         N_film_layers = self.interface.film.layers
-        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
-        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
-        film_bulk_scale = N_film_layers * N_film_sc
-        sub_bulk_scale = N_sub_layers * N_sub_sc
+        # N_sub_sc = np.abs(np.linalg.det(self.interface.match.substrate_sl_transform))
+        # N_film_sc = np.linalg.det(self.interface.match.film_sl_transform))
+        film_bulk_scale = N_film_layers
+        sub_bulk_scale = N_sub_layers
 
         avg_film_surface_energy = (
             film_sc_energy - (film_bulk_scale * film_bulk_energy)

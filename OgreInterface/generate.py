@@ -230,9 +230,9 @@ class SurfaceGenerator(Sequence):
         )
 
     def _get_bulk(self, atoms_or_struc):
-        if type(atoms_or_struc) == Atoms:
+        if type(atoms_or_struc) is Atoms:
             init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
-        elif type(atoms_or_struc) == Structure:
+        elif type(atoms_or_struc) is Structure:
             init_structure = atoms_or_struc
         else:
             raise TypeError(
@@ -1326,22 +1326,22 @@ class InterfaceGenerator:
         self,
         substrate: Union[Surface, Interface],
         film: Union[Surface, Interface],
-        max_area_mismatch: float = 0.01,
         max_strain: float = 0.01,
+        max_area_mismatch: Optional[float] = None,
         max_area: Optional[float] = None,
         interfacial_distance: Optional[float] = 2.0,
         vacuum: float = 40.0,
         center: bool = False,
         substrate_strain_fraction: float = 0.0,
     ):
-        if type(substrate) == Surface or type(substrate) == Interface:
+        if type(substrate) is Surface or type(substrate) is Interface:
             self.substrate = substrate
         else:
             raise TypeError(
                 f"InterfaceGenerator accepts 'ogre.core.Surface' or 'ogre.core.Interface' not '{type(substrate).__name__}'"
             )
 
-        if type(film) == Surface or type(film) == Interface:
+        if type(film) is Surface or type(film) is Interface:
             self.film = film
         else:
             raise TypeError(

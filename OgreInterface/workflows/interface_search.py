@@ -49,8 +49,8 @@ class IonicInterfaceSearch:
         substrate_miller_index: List[int],
         film_miller_index: List[int],
         minimum_slab_thickness: float = 18.0,
-        max_area_mismatch: float = 0.01,
         max_strain: float = 0.01,
+        max_area_mismatch: Optional[float] = None,
         max_area: Optional[float] = None,
         substrate_strain_fraction: float = 0.0,
         refine_structure: bool = True,
@@ -59,21 +59,21 @@ class IonicInterfaceSearch:
         born_n: float = 12.0,
         n_particles_PSO: int = 20,
         max_iterations_PSO: int = 150,
-        z_bounds_PSO: List[float] = [1.0, 6.0],
+        z_bounds_PSO: List[float] = [1.0, 4.5],
         grid_density_PES: float = 2.5,
         use_most_stable_substrate: bool = True,
         cmap_PES="coolwarm",
     ):
         self._refine_structure = refine_structure
         self._suppress_warnings = suppress_warnings
-        if type(substrate_bulk) == str:
+        if type(substrate_bulk) is str:
             self._substrate_bulk, _ = self._get_bulk(
                 Structure.from_file(substrate_bulk)
             )
         else:
             self._substrate_bulk, _ = self._get_bulk(substrate_bulk)
 
-        if type(film_bulk) == str:
+        if type(film_bulk) is str:
             self._film_bulk, _ = self._get_bulk(Structure.from_file(film_bulk))
         else:
             self._film_bulk, _ = self._get_bulk(film_bulk)
@@ -95,9 +95,9 @@ class IonicInterfaceSearch:
         self._cmap_PES = cmap_PES
 
     def _get_bulk(self, atoms_or_struc):
-        if type(atoms_or_struc) == Atoms:
+        if type(atoms_or_struc) is Atoms:
             init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
-        elif type(atoms_or_struc) == Structure:
+        elif type(atoms_or_struc) is Structure:
             init_structure = atoms_or_struc
         else:
             raise TypeError(
@@ -279,6 +279,10 @@ class IonicInterfaceSearch:
             filter_on_charge=filter_on_charge,
         )
 
+        print(
+            f"Preparing to Optimize {len(film_and_substrate_inds)} Interfaces ..."
+        )
+
         energies = []
         opt_abz_shifts = []
         surface_charges = []
@@ -350,8 +354,8 @@ class IonicInterfaceSearch:
 
             intE_matcher.run_z_shift(
                 interfacial_distances=np.linspace(
-                    max(1.0, opt_d_pso - 2.0),
-                    opt_d_pso + 2.0,
+                    max(self._z_bounds_PSO[0], opt_d_pso - 1.5),
+                    min(opt_d_pso + 2.0, self._z_bounds_PSO[1]),
                     31,
                 ),
                 output=join(interface_dir, "z_shift.png"),

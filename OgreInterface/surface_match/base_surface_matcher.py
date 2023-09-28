@@ -85,8 +85,8 @@ class BaseSurfaceMatcher:
             H_inds = np.where(np.array(self.iface.atomic_numbers) == 1)[0]
             self.iface.remove_sites(H_inds)
 
-        self.film_bulk = self.interface.film_oriented_bulk_structure
-        self.sub_bulk = self.interface.substrate_oriented_bulk_structure
+        self.film_bulk = self.interface.film_oriented_bulk_supercell
+        self.sub_bulk = self.interface.substrate_oriented_bulk_supercell
 
         self.film_bulk.add_site_property(
             "is_film",
@@ -834,7 +834,13 @@ class BaseSurfaceMatcher:
                 batch_inputs=inputs, shifts=shift.reshape(1, -1)
             )
 
-            (_interface_energy, _coulomb, _born, _, _,) = self._calculate(
+            (
+                _interface_energy,
+                _coulomb,
+                _born,
+                _,
+                _,
+            ) = self._calculate(
                 inputs,
                 is_interface=True,
             )

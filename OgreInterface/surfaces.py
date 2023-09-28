@@ -207,21 +207,28 @@ class Surface:
     @property
     def top_surface_charge(self) -> float:
         frac_coords = self.oriented_bulk_structure.frac_coords
+        mod_frac_coords = np.mod(np.round(frac_coords[:, -1], 5), 1.0)
+        mod_frac_coords += 1.0 - mod_frac_coords.max()
+
         charges = np.array(
             self.oriented_bulk_structure.site_properties["charge"]
         )
 
-        z_frac = 1 - np.mod(np.round(frac_coords[:, -1], 5), 1)
+        z_frac = 1 - mod_frac_coords
 
         return np.round((charges * z_frac).sum(), 4)
 
     @property
     def bottom_surface_charge(self) -> float:
         frac_coords = self.oriented_bulk_structure.frac_coords
+
+        mod_frac_coords = np.mod(np.round(frac_coords[:, -1], 5), 1.0)
+        mod_frac_coords -= mod_frac_coords.min()
+
         charges = np.array(
             self.oriented_bulk_structure.site_properties["charge"]
         )
-        z_frac = np.mod(np.round(frac_coords[:, -1], 5), 1)
+        z_frac = mod_frac_coords
 
         return np.round((charges * z_frac).sum(), 4)
 
@@ -1135,9 +1142,12 @@ class Interface:
         film_lattice = self._film_supercell.lattice.matrix[:2]
         substrate_lattice = self._substrate_supercell.lattice.matrix[:2]
 
-        avg_lattice = (
-            (1 - self._substrate_strain_fraction) * film_lattice
-        ) + (self._substrate_strain_fraction * substrate_lattice)
+        film_frac = self._substrate_strain_fraction
+        sub_frac = 1 - film_frac
+
+        avg_lattice = (film_frac * film_lattice) + (
+            sub_frac * substrate_lattice
+        )
 
         return avg_lattice
 
@@ -1624,7 +1634,6 @@ class Interface:
     def _load_relaxed_structure(
         self, relaxed_structure_file: str
     ) -> np.ndarray:
-
         with open(relaxed_structure_file, "r") as f:
             poscar_str = f.read().split("\n")
 
@@ -1650,10 +1659,7 @@ class Interface:
             and film_termination_index == self.film.termination_index
             and sub_termination_index == self.substrate.termination_index
         ):
-            poscar = Poscar.from_string(
-                "\n".join(poscar_str), read_velocities=False
-            )
-            relaxed_structure = poscar.structure
+            relaxed_structure = Structure.from_file(relaxed_structure_file)
 
             if ortho:
                 unrelaxed_structure = self._orthogonal_structure.copy()
@@ -1669,6 +1675,10 @@ class Interface:
             )[0]
 
             unrelaxed_structure.remove_sites(unrelaxed_hydrogen_inds)
+
+            unrelaxed_structure.add_site_property(
+                "orig_ind", list(range(len(unrelaxed_structure)))
+            )
 
             is_negative = np.linalg.det(unrelaxed_structure.lattice.matrix) < 0
 
@@ -1758,6 +1768,7 @@ class Interface:
             relaxed_ref = relaxed_structure[ref_ind].coords
 
             for i in relaxed_inds:
+                init_ind = unrelaxed_structure[i].properties["orig_ind"]
                 relaxed_coords = relaxed_structure[i].coords
                 relaxed_coords -= relaxed_ref
                 unrelaxed_coords = unrelaxed_structure[i].coords
@@ -1769,7 +1780,7 @@ class Interface:
                 )
                 center_ind = np.argmin(dists)
                 bond = all_relaxed_coords[center_ind] - unrelaxed_coords
-                relaxation_shifts[i] = bond
+                relaxation_shifts[init_ind] = bond
 
             return relaxation_shifts
         else:
@@ -2266,6 +2277,7 @@ class Interface:
         inplane_strain_transformation = (
             np.linalg.inv(sc_matrix[:2, :2]) @ avg_sc_matrix[:2, :2]
         )
+
         inplane_strained_matrix = (
             sc_matrix[:, :2] @ inplane_strain_transformation
         )
@@ -2305,7 +2317,6 @@ class Interface:
         Atoms,
         Atoms,
     ]:
-
         # Get the strained substrate and film
         strained_sub = self._strained_sub
         strained_film = self._strained_film
