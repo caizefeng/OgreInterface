@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "OgreInterface"
-version = "1.1.4"
+version = "1.1.7"
 description = "A Python library used to generate and optimize epitaxial inorganic interface structures."
 authors = [{name = "Derek Dardzinski", email = "dardzinski.derek@gmail.com"}]
 dependencies = [
@@ -27,3 +27,6 @@ source = "https://github.com/DerekDardzinski/OgreInterface"
 
 [tool.setuptools.packages.find]
 exclude = ["site"]
+
+[tool.setuptools.package-data]
+"OgreInterface.data" = ["*.csv"]
