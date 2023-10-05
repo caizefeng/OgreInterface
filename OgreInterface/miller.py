@@ -372,19 +372,13 @@ class MillerSearch(object):
         """
         ylabels = []
         for ylabel in self.film_inds:
-            tmp_label = [
-                str(i) if i >= 0 else "$\\overline{" + str(-i) + "}$"
-                for i in ylabel
-            ]
-            ylabels.append(f'({"".join(tmp_label)})')
+            tmp_label = utils.get_miller_index_label(ylabel)
+            ylabels.append(f"({tmp_label})")
 
         xlabels = []
         for xlabel in self.substrate_inds:
-            tmp_label = [
-                str(i) if i >= 0 else "$\\overline{" + str(-i) + "}$"
-                for i in xlabel
-            ]
-            xlabels.append(f'({"".join(tmp_label)})')
+            tmp_label = utils.get_miller_index_label(xlabel)
+            xlabels.append(f"({tmp_label})")
 
         N = len(self.film_inds)
         M = len(self.substrate_inds)

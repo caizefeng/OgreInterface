@@ -15,6 +15,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from typing import Tuple, Union, List, Dict
 import itertools
 
+from OgreInterface import utils
+
 
 def _get_triangle(
     coords: Tuple[int, int],
@@ -81,6 +83,11 @@ def plot_surface_charge_matrix(
     output: str = "surface_charge_matrix.png",
     dpi: int = 400,
 ):
+    sub_comp = utils.get_latex_formula(substrates[0].formula)
+    film_comp = utils.get_latex_formula(films[0].formula)
+    sub_miller = utils.get_miller_index_label(substrates[0].miller_index)
+    film_miller = utils.get_miller_index_label(films[0].miller_index)
+
     film_surface_charges = [film.bottom_surface_charge for film in films]
     substrate_surface_charges = [
         substrate.bottom_surface_charge for substrate in substrates
@@ -106,8 +113,14 @@ def plot_surface_charge_matrix(
     fontsize = 14
 
     ax.tick_params(labelsize=fontsize)
-    ax.set_xlabel("Substrate Termination Index", fontsize=fontsize)
-    ax.set_ylabel("Film Termination Index", fontsize=fontsize)
+    ax.set_xlabel(
+        f"{sub_comp}({sub_miller}) Termination Index",
+        fontsize=fontsize,
+    )
+    ax.set_ylabel(
+        f"{film_comp}({film_miller}) Termination Index",
+        fontsize=fontsize,
+    )
 
     cmap_max = max(
         1,

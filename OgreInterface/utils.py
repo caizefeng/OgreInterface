@@ -5,6 +5,7 @@ import itertools
 import functools
 import math
 import collections
+from typing import List
 
 from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
@@ -16,6 +17,55 @@ from pymatgen.analysis.local_env import JmolNN
 import numpy as np
 import networkx as nx
 import spglib
+
+
+def get_miller_index_label(miller_index: List[int]):
+    return "".join(
+        [
+            str(i) if i >= 0 else "$\\overline{" + str(-i) + "}$"
+            for i in miller_index
+        ]
+    )
+
+
+def add_symmetry_info(struc: Structure, return_primitive: bool = False):
+    init_lattice = struc.lattice.matrix
+    init_positions = struc.frac_coords
+    init_numbers = np.array(struc.atomic_numbers)
+    init_cell = (init_lattice, init_positions, init_numbers)
+
+    init_dataset = spglib.get_symmetry_dataset(init_cell)
+
+    struc.add_site_property(
+        "bulk_wyckoff",
+        init_dataset["wyckoffs"],
+    )
+
+    struc.add_site_property(
+        "bulk_equivalent",
+        init_dataset["equivalent_atoms"].tolist(),
+    )
+
+    if return_primitive:
+        prim_mapping = init_dataset["mapping_to_primitive"]
+        _, prim_inds = np.unique(prim_mapping, return_index=True)
+
+        prim_bulk = spglib_standardize(
+            structure=struc,
+            to_primitive=True,
+            no_idealize=True,
+        )
+
+        prim_bulk.add_site_property(
+            "bulk_wyckoff",
+            [init_dataset["wyckoffs"][i] for i in prim_inds],
+        )
+        prim_bulk.add_site_property(
+            "bulk_equivalent",
+            init_dataset["equivalent_atoms"][prim_inds].tolist(),
+        )
+
+        return prim_bulk
 
 
 def _get_colored_molecules(struc, output):
@@ -265,7 +315,9 @@ def add_molecules(struc):
 
 
 def conv_a_to_b(struc_a: Structure, struc_b: Structure) -> np.ndarray:
-    return struc_b.lattice.matrix @ struc_a.lattice.inv_matrix
+    return np.round(
+        struc_b.lattice.matrix @ struc_a.lattice.inv_matrix
+    ).astype(int)
 
 
 def get_atoms(struc):

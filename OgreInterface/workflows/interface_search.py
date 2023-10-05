@@ -59,7 +59,7 @@ class IonicInterfaceSearch:
         born_n: float = 12.0,
         n_particles_PSO: int = 20,
         max_iterations_PSO: int = 150,
-        z_bounds_PSO: List[float] = [1.0, 4.5],
+        z_bounds_PSO: Optional[List[float]] = None,
         grid_density_PES: float = 2.5,
         use_most_stable_substrate: bool = True,
         cmap_PES="coolwarm",
@@ -197,8 +197,11 @@ class IonicInterfaceSearch:
     ) -> List[int]:
         surface_energies = []
         for surface in surface_generator:
-            surfE_calculator = IonicSurfaceEnergy(surface=surface)
-            surface_energies.append(surfE_calculator.get_surface_energy())
+            surfE_calculator = IonicSurfaceEnergy(
+                oriented_bulk_structure=surface.oriented_bulk_structure,
+                layers=surface.layers,
+            )
+            surface_energies.append(surfE_calculator.get_cleavage_energy())
 
         surface_energies = np.round(np.array(surface_energies), 6)
         min_surface_energy = surface_energies.min()
@@ -246,14 +249,12 @@ class IonicInterfaceSearch:
         filter_on_charge: bool = True,
         output_folder: str = None,
     ):
+        sub_comp = self._substrate_bulk.composition.reduced_formula
+        film_comp = self._film_bulk.composition.reduced_formula
+        sub_miller = "".join([str(i) for i in self._substrate_miller_index])
+        film_miller = "".join([str(i) for i in self._film_miller_index])
         if output_folder is None:
-            sub_comp = self._substrate_bulk.composition.reduced_formula
-            film_comp = self._film_bulk.composition.reduced_formula
-            sub_miller = "".join(
-                [str(i) for i in self._substrate_miller_index]
-            )
-            film_miller = "".join([str(i) for i in self._film_miller_index])
-            base_dir = f"{sub_comp}{sub_miller}_{film_comp}{film_miller}"
+            base_dir = f"{film_comp}{film_miller}_{sub_comp}{sub_miller}"
 
             current_dirs = [d for d in os.listdir() if base_dir in d]
 
@@ -280,7 +281,7 @@ class IonicInterfaceSearch:
         )
 
         print(
-            f"Preparing to Optimize {len(film_and_substrate_inds)} Interfaces ..."
+            f"Preparing to Optimize {len(film_and_substrate_inds)} {film_comp}({film_miller})/{sub_comp}({sub_miller}) Interfaces..."
         )
 
         energies = []
@@ -306,8 +307,8 @@ class IonicInterfaceSearch:
             sub_surface_charge = sub.top_surface_charge
             surface_charges.append([film_surface_charge, sub_surface_charge])
 
-            film.write_file(join(interface_dir, f"POSCAR_film_{film_ind}"))
-            sub.write_file(join(interface_dir, f"POSCAR_substrate_{sub_ind}"))
+            film.write_file(join(interface_dir, f"POSCAR_film_{film_ind:02d}"))
+            sub.write_file(join(interface_dir, f"POSCAR_sub_{sub_ind:02d}"))
 
             interface_generator = InterfaceGenerator(
                 substrate=sub,
@@ -337,6 +338,13 @@ class IonicInterfaceSearch:
                 grid_density=self._grid_density_PES,
             )
 
+            if self._z_bounds_PSO is None:
+                min_z = 0.5
+                max_z = 1.1 * intE_matcher._max_z
+            else:
+                min_z = self._z_bounds_PSO[0]
+                max_z = self._z_bounds_PSO[1]
+
             _ = intE_matcher.optimizePSO(
                 z_bounds=self._z_bounds_PSO,
                 max_iters=self._max_iterations_PSO,
@@ -354,15 +362,20 @@ class IonicInterfaceSearch:
 
             intE_matcher.run_z_shift(
                 interfacial_distances=np.linspace(
-                    max(self._z_bounds_PSO[0], opt_d_pso - 1.5),
-                    min(opt_d_pso + 2.0, self._z_bounds_PSO[1]),
+                    max(min_z, opt_d_pso - 2.0),
+                    min(opt_d_pso + 2.0, max_z),
                     31,
                 ),
                 output=join(interface_dir, "z_shift.png"),
             )
             intE_matcher.get_optimized_structure()
 
-            interface.write_file(join(interface_dir, "POSCAR_interface"))
+            interface.write_file(
+                join(
+                    interface_dir,
+                    f"POSCAR_interface_film{film_ind:02d}_sub{sub_ind:02d}",
+                )
+            )
 
             opt_d = interface.interfacial_distance
             a_shift = np.mod(interface._a_shift, 1.0)

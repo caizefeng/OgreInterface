@@ -85,17 +85,20 @@ class BaseSurfaceMatcher:
             H_inds = np.where(np.array(self.iface.atomic_numbers) == 1)[0]
             self.iface.remove_sites(H_inds)
 
-        self.film_bulk = self.interface.film_oriented_bulk_supercell
-        self.sub_bulk = self.interface.substrate_oriented_bulk_supercell
+        # self.film_bulk = self.interface.film_oriented_bulk_supercell
+        # self.sub_bulk = self.interface.substrate_oriented_bulk_supercell
 
-        self.film_bulk.add_site_property(
-            "is_film",
-            [True] * len(self.film_bulk),
-        )
-        self.sub_bulk.add_site_property(
-            "is_film",
-            [False] * len(self.sub_bulk),
-        )
+        # self.film_bulk.add_site_property(
+        #     "is_film",
+        #     [True] * len(self.film_bulk),
+        # )
+        # self.sub_bulk.add_site_property(
+        #     "is_film",
+        #     [False] * len(self.sub_bulk),
+        # )
+
+        self.film_obs = self.interface.film_oriented_bulk_structure
+        self.sub_obs = self.interface.substrate_oriented_bulk_structure
 
         self.film_sc_part = self.interface.get_film_supercell().copy()
         self.sub_sc_part = self.interface.get_substrate_supercell().copy()
@@ -269,7 +272,9 @@ class BaseSurfaceMatcher:
         fontsize: int = 14,
         output: str = "PES.png",
         dpi: int = 400,
-        show_opt: bool = False,
+        show_opt_energy: bool = False,
+        show_opt_shift: bool = True,
+        scale_data: bool = False,
     ) -> float:
         """This function plots the 2D potential energy surface (PES) from DFT (or other) calculations
 
@@ -296,15 +301,10 @@ class BaseSurfaceMatcher:
         y_grid = np.linspace(0, 1, self.grid_density_y)
         X, Y = np.meshgrid(x_grid, y_grid)
 
-        N_sub_layers = self.interface.substrate.layers
-        N_film_layers = self.interface.film.layers
-        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
-        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
+        Z = (interface_energy - sub_energy - film_energy) / self.interface.area
 
-        sub_obs = sub_energy * N_sub_sc * N_sub_layers
-        film_obs = film_energy * N_film_sc * N_film_layers
-
-        Z = (interface_energy - film_obs - sub_obs) / (2 * self.interface.area)
+        # if scale_data:
+        #     Z /= max(abs(Z.min()), abs(Z.max()))
 
         a = self.matrix[0, :2]
         b = self.matrix[1, :2]
@@ -345,7 +345,9 @@ class BaseSurfaceMatcher:
             dpi=dpi,
             cmap=cmap,
             fontsize=fontsize,
-            show_max=show_opt,
+            show_max=show_opt_energy,
+            show_shift=show_opt_shift,
+            scale_data=scale_data,
             shift=True,
         )
 
@@ -382,16 +384,8 @@ class BaseSurfaceMatcher:
         Returns:
             The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
         """
-        N_sub_layers = self.interface.substrate.layers
-        N_film_layers = self.interface.film.layers
-        N_sub_sc = np.linalg.det(self.interface.match.substrate_sl_transform)
-        N_film_sc = np.linalg.det(self.interface.match.film_sl_transform)
-
-        sub_obs = sub_energy * N_sub_sc * N_sub_layers
-        film_obs = film_energy * N_film_sc * N_film_layers
-
-        interface_energy = (energies - film_obs - sub_obs) / (
-            2 * self.interface.area
+        interface_energy = (energies - film_energy - sub_energy) / (
+            self.interface.area
         )
 
         fig, axs = plt.subplots(
@@ -464,7 +458,17 @@ class BaseSurfaceMatcher:
         return frac_abc[:, :2]
 
     def _plot_heatmap(
-        self, fig, ax, X, Y, Z, cmap, fontsize, show_max, add_color_bar
+        self,
+        fig,
+        ax,
+        X,
+        Y,
+        Z,
+        cmap,
+        fontsize,
+        show_max,
+        scale_data,
+        add_color_bar,
     ):
         ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
         ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
@@ -499,13 +503,13 @@ class BaseSurfaceMatcher:
 
         min_Z = np.nanmin(Z)
         max_Z = np.nanmax(Z)
-        if type(cmap) == str:
+        if type(cmap) is str:
             if cmap in diverging_names:
                 bound = np.max([np.abs(min_Z), np.abs(max_Z)])
                 norm = Normalize(vmin=-bound, vmax=bound)
             else:
                 norm = Normalize(vmin=min_Z, vmax=max_Z)
-        elif type(cmap) == ListedColormap:
+        elif type(cmap) is ListedColormap:
             name = cmap.name
             if name in diverging_names:
                 bound = np.max([np.abs(min_Z), np.abs(max_Z)])
@@ -533,18 +537,32 @@ class BaseSurfaceMatcher:
                 orientation="horizontal",
             )
             cbar.ax.tick_params(labelsize=fontsize)
-            cbar.ax.locator_params(nbins=3)
+
+            if scale_data:
+                units = ""
+                base_label = "$E_{adh}$/max(|$E_{adh}$|)"
+            else:
+                units = " (eV/$\\AA^{2}$)"
+                base_label = "$E_{adh}$" + units
 
             if show_max:
                 E_opt = np.min(Z)
-                label = "$E_{adh}$ (eV) : $E_{min}$ = " + f"{E_opt:.4f} eV"
+                label = base_label + " : $E_{min}$ = " + f"{E_opt:.4f}" + units
                 cbar.set_label(label, fontsize=fontsize, labelpad=8)
             else:
-                label = "$E_{adh}$ (eV)"
+                label = base_label
                 cbar.set_label(label, fontsize=fontsize, labelpad=8)
 
             cax.xaxis.set_ticks_position("top")
             cax.xaxis.set_label_position("top")
+            cax.xaxis.set_ticks(
+                [norm.vmin, (norm.vmin + norm.vmax) / 2, norm.vmax],
+                [
+                    f"{norm.vmin:.2f}",
+                    f"{(norm.vmin + norm.vmax) / 2:.2f}",
+                    f"{norm.vmax:.2f}",
+                ],
+            )
             ax.tick_params(labelsize=fontsize)
 
     def _get_interpolated_data(self, Z, image):
@@ -586,10 +604,15 @@ class BaseSurfaceMatcher:
         cmap,
         fontsize,
         show_max,
+        show_shift,
+        scale_data,
         shift,
     ):
         for i, image in enumerate(self.shift_images):
             X_plot, Y_plot, Z_plot = self._get_interpolated_data(Z, image)
+
+            if scale_data:
+                Z_plot /= max(abs(Z.min()), abs(Z.max()))
 
             if i == 0:
                 self._plot_heatmap(
@@ -601,6 +624,7 @@ class BaseSurfaceMatcher:
                     cmap=cmap,
                     fontsize=fontsize,
                     show_max=show_max,
+                    scale_data=scale_data,
                     add_color_bar=True,
                 )
 
@@ -615,15 +639,16 @@ class BaseSurfaceMatcher:
                 max_Z = np.min(Z_plot)
                 plot_shift = opt_shift.dot(self.matrix)
 
-                ax.scatter(
-                    [plot_shift[0]],
-                    [plot_shift[1]],
-                    fc="white",
-                    ec="black",
-                    marker="X",
-                    s=100,
-                    zorder=10,
-                )
+                if show_shift:
+                    ax.scatter(
+                        [plot_shift[0]],
+                        [plot_shift[1]],
+                        fc="white",
+                        ec="black",
+                        marker="X",
+                        s=100,
+                        zorder=10,
+                    )
 
                 if shift:
                     self.opt_xy_shift = opt_shift[:2]
@@ -637,6 +662,7 @@ class BaseSurfaceMatcher:
                     cmap=cmap,
                     fontsize=fontsize,
                     show_max=show_max,
+                    scale_data=scale_data,
                     add_color_bar=False,
                 )
 
@@ -683,7 +709,9 @@ class BaseSurfaceMatcher:
         fontsize: int = 14,
         output: str = "PES.png",
         dpi: int = 400,
-        show_opt: bool = False,
+        show_opt_energy: bool = False,
+        show_opt_shift: bool = True,
+        scale_data: bool = False,
         save_raw_data_file=None,
     ) -> float:
         """This function calculates the 2D potential energy surface (PES)
@@ -745,6 +773,9 @@ class BaseSurfaceMatcher:
                 energies=Z_adh,
             )
 
+        # if scale_data:
+        #     Z_adh /= max(abs(Z_adh.min()), abs(Z_adh.max()))
+
         a = self.matrix[0, :2]
         b = self.matrix[1, :2]
 
@@ -784,7 +815,9 @@ class BaseSurfaceMatcher:
             dpi=dpi,
             cmap=cmap,
             fontsize=fontsize,
-            show_max=show_opt,
+            show_max=show_opt_energy,
+            show_shift=show_opt_shift,
+            scale_data=scale_data,
             shift=True,
         )
 

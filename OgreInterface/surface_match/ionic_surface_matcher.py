@@ -1,4 +1,4 @@
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from itertools import groupby, combinations_with_replacement, product
 from os.path import join, dirname, split
 
@@ -15,7 +15,8 @@ from OgreInterface.score_function import (
     IonicShiftedForcePotential,
 )
 from OgreInterface.surfaces import Interface
-from OgreInterface.surface_match.base_surface_matcher import BaseSurfaceMatcher
+from OgreInterface.surface_match import BaseSurfaceMatcher
+from OgreInterface.surface_energy import IonicSurfaceEnergy
 
 
 DATA_PATH = join(split(dirname(__file__))[0], "data")
@@ -64,23 +65,36 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self._born_n = born_n
         self._cutoff = 18.0
         self.charge_dict = self._get_charges()
-        self.r0_dict = self._get_r0s(
+        self.r0_dict, self.eq_to_Z_dict = self._get_r0s(
             sub=self.interface.substrate.bulk_structure,
             film=self.interface.film.bulk_structure,
             charge_dict=self.charge_dict,
         )
+        self._max_z = self._get_max_z()
+
+        self.surface_energy_module = IonicSurfaceEnergy
+        self.surface_energy_kwargs = {
+            "film": {
+                "oriented_bulk_structure": self.interface.film_oriented_bulk_structure,
+                "layers": self.interface.film.layers,
+                "r0_dict": self.r0_dict["film"],
+                "charge_dict": self.charge_dict["film"],
+            },
+            "sub": {
+                "oriented_bulk_structure": self.interface.substrate_oriented_bulk_structure,
+                "layers": self.interface.substrate.layers,
+                "r0_dict": self.r0_dict["sub"],
+                "charge_dict": self.charge_dict["sub"],
+            },
+        }
 
         self._add_born_ns(self.iface)
         self._add_born_ns(self.sub_sc_part)
         self._add_born_ns(self.film_sc_part)
-        self._add_born_ns(self.sub_bulk)
-        self._add_born_ns(self.film_bulk)
 
         self._add_r0s(self.iface)
         self._add_r0s(self.sub_sc_part)
         self._add_r0s(self.film_sc_part)
-        self._add_r0s(self.sub_bulk)
-        self._add_r0s(self.film_bulk)
 
         self.d_interface = self.interface.interfacial_distance
         self.opt_xy_shift = np.zeros(2)
@@ -102,24 +116,41 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             structure=self.film_sc_part,
             is_slab=True,
         )
-        self.sub_bulk_inputs = self._generate_base_inputs(
-            structure=self.sub_bulk,
-            is_slab=False,
-        )
-        self.film_bulk_inputs = self._generate_base_inputs(
-            structure=self.film_bulk,
-            is_slab=False,
-        )
 
         (
             self.film_energy,
             self.sub_energy,
-            self.film_bulk_energy,
-            self.sub_bulk_energy,
             self.film_surface_energy,
             self.sub_surface_energy,
             self.const_iface_energy,
         ) = self._get_const_energies()
+
+    def _get_max_z(self):
+        charges = self.charge_dict
+        r0s = self.r0_dict
+        eq_to_Z = self.eq_to_Z_dict
+
+        positive_r0s = []
+        negative_r0s = []
+
+        for sub_film, sub_film_r0s in r0s.items():
+            for eq, r in sub_film_r0s.items():
+                chg = charges[sub_film][
+                    chemical_symbols[eq_to_Z[sub_film][eq]]
+                ]
+                if np.sign(chg) > 0:
+                    positive_r0s.append(r)
+                elif np.sign(chg) < 0:
+                    negative_r0s.append(r)
+                else:
+                    positive_r0s.append(r)
+                    negative_r0s.append(r)
+
+        combos = product(positive_r0s, negative_r0s)
+        bond_lengths = [sum(combo) for combo in combos]
+        max_bond_length = max(bond_lengths)
+
+        return max_bond_length
 
     def _get_iface_parts(
         self,
@@ -180,7 +211,8 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         r0s = []
 
         for site in struc:
-            atomic_number = site.specie.Z
+            # atomic_number = site.specie.Z
+            atomic_number = site.properties["bulk_equivalent"]
             if bool(site.properties["is_film"]):
                 r0s.append(self.r0_dict["film"][atomic_number])
             else:
@@ -240,73 +272,15 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return oxidation_states
 
-    def _get_neighborhood_info_pmg(self, struc, charge_dict):
-        struc.add_oxidation_state_by_element(charge_dict)
-        Zs = np.unique(struc.atomic_numbers)
-        combos = combinations_with_replacement(Zs, 2)
-        neighbor_dict = {c: None for c in combos}
-
-        neighbor_list = []
-        ionic_radii_dict = {Z: [] for Z in Zs}
-
-        cnn = CrystalNN(search_cutoff=7.0, cation_anion=False)
-        for i, site in enumerate(struc.sites):
-            info_dict = cnn.get_nn_info(struc, i)
-            for neighbor in info_dict:
-                dist = site.distance(
-                    neighbor["site"], jimage=neighbor["image"]
-                )
-                species = tuple(
-                    sorted([site.specie.Z, neighbor["site"].specie.Z])
-                )
-                neighbor_list.append([species, dist])
-
-        sorted_neighbor_list = sorted(neighbor_list, key=lambda x: x[0])
-        groups = groupby(sorted_neighbor_list, key=lambda x: x[0])
-
-        for group in groups:
-            nn = list(zip(*group[1]))[1]
-            neighbor_dict[group[0]] = np.min(nn)
-
-        for n, d in neighbor_dict.items():
-            s1 = chemical_symbols[n[0]]
-            s2 = chemical_symbols[n[1]]
-            c1 = charge_dict[s1]
-            c2 = charge_dict[s2]
-
-            try:
-                d1 = float(Element(s1).ionic_radii[c1])
-            except KeyError:
-                # print(
-                #     f"No ionic radius available for {s1}, using the atomic radius instead"
-                # )
-                d1 = float(Element(s1).atomic_radius)
-
-            try:
-                d2 = float(Element(s2).ionic_radii[c2])
-            except KeyError:
-                # print(
-                #     f"No ionic radius available for {s2}, using the atomic radius instead"
-                # )
-                d2 = float(Element(s2).atomic_radius)
-
-            radius_frac = d1 / (d1 + d2)
-
-            if d is None:
-                neighbor_dict[n] = d1 + d2
-            else:
-                r0_1 = radius_frac * d
-                r0_2 = (1 - radius_frac) * d
-                ionic_radii_dict[n[0]].append(r0_1)
-                ionic_radii_dict[n[1]].append(r0_2)
-
-        mean_radius_dict = {k: np.mean(v) for k, v in ionic_radii_dict.items()}
-
-        return mean_radius_dict
-
     def _get_neighborhood_info(self, struc, charge_dict):
-        struc.add_oxidation_state_by_element(charge_dict)
-        Zs = np.unique(struc.atomic_numbers)
+        oxi_struc = struc.copy()
+        oxi_struc.add_oxidation_state_by_element(charge_dict)
+        bulk_equiv = np.array(oxi_struc.site_properties["bulk_equivalent"])
+        atomic_numbers = np.array(oxi_struc.atomic_numbers)
+        eq_to_Z = np.unique(np.c_[bulk_equiv, atomic_numbers], axis=0)
+        eq_to_Z_dict = dict(zip(*eq_to_Z.T))
+
+        Zs = np.unique(oxi_struc.site_properties["bulk_equivalent"])
         combos = combinations_with_replacement(Zs, 2)
         neighbor_dict = {c: None for c in combos}
 
@@ -315,17 +289,22 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         coordination_dict = {Z: [] for Z in Zs}
 
         cnn = CrystalNN(search_cutoff=7.0, cation_anion=True)
-        for i, site in enumerate(struc.sites):
-            info_dict = cnn.get_nn_info(struc, i)
-            coordination_dict[site.specie.Z] = len(info_dict)
+        for i, site in enumerate(oxi_struc.sites):
+            site_equiv = site.properties["bulk_equivalent"]
+            info_dict = cnn.get_nn_info(oxi_struc, i)
+            coordination_dict[site.properties["bulk_equivalent"]] = len(
+                info_dict
+            )
             for neighbor in info_dict:
+                neighbor_site_equiv = neighbor["site"].properties[
+                    "bulk_equivalent"
+                ]
                 frac_diff = site.frac_coords - neighbor["site"].frac_coords
                 dist = np.linalg.norm(
-                    struc.lattice.get_cartesian_coords(frac_diff)
+                    oxi_struc.lattice.get_cartesian_coords(frac_diff)
                 )
-                species = tuple(
-                    sorted([site.specie.Z, neighbor["site"].specie.Z])
-                )
+
+                species = tuple(sorted([site_equiv, neighbor_site_equiv]))
                 neighbor_list.append([species, dist])
 
         sorted_neighbor_list = sorted(neighbor_list, key=lambda x: x[0])
@@ -336,13 +315,16 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             neighbor_dict[group[0]] = np.min(nn)
 
         for n, d in neighbor_dict.items():
-            s1 = chemical_symbols[n[0]]
-            s2 = chemical_symbols[n[1]]
+            z1 = eq_to_Z_dict[n[0]]
+            z2 = eq_to_Z_dict[n[1]]
+
+            s1 = chemical_symbols[z1]
+            s2 = chemical_symbols[z2]
             c1 = charge_dict[s1]
             c2 = charge_dict[s2]
 
             z1_df = self._ionic_radii_df[
-                (self._ionic_radii_df["Atomic Number"] == n[0])
+                (self._ionic_radii_df["Atomic Number"] == z1)
                 & (self._ionic_radii_df["Oxidation State"] == c1)
             ]
 
@@ -357,10 +339,10 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
                 else:
                     d1 = z1_radii["ML Mean"].values.mean() / 100
             else:
-                d1 = covalent_radii[n[0]]
+                d1 = covalent_radii[z1]
 
             z2_df = self._ionic_radii_df[
-                (self._ionic_radii_df["Atomic Number"] == n[1])
+                (self._ionic_radii_df["Atomic Number"] == z2)
                 & (self._ionic_radii_df["Oxidation State"] == c2)
             ]
 
@@ -375,73 +357,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
                 else:
                     d2 = z2_radii["ML Mean"].values.mean() / 100
             else:
-                d2 = covalent_radii[n[1]]
-
-            radius_frac = d1 / (d1 + d2)
-
-            if d is None:
-                neighbor_dict[n] = d1 + d2
-            else:
-                r0_1 = radius_frac * d
-                r0_2 = (1 - radius_frac) * d
-                ionic_radii_dict[n[0]].append(r0_1)
-                ionic_radii_dict[n[1]].append(r0_2)
-
-        mean_radius_dict = {k: np.mean(v) for k, v in ionic_radii_dict.items()}
-
-        return mean_radius_dict
-
-    def _get_neighborhood_info_nn(self, struc, charge_dict):
-        atoms = AseAtomsAdaptor().get_atoms(struc)
-        atomic_numbers = atoms.get_atomic_numbers()
-        unique_atomic_numbers = np.unique(atomic_numbers)
-        combos = combinations_with_replacement(unique_atomic_numbers, 2)
-        neighbor_dict = {c: None for c in combos}
-
-        neighbor_list = []
-        ionic_radii_dict = {Z: [] for Z in unique_atomic_numbers}
-
-        idx_i, idx_j, dists = neighbour_list(
-            "ijd",
-            atoms=AseAtomsAdaptor().get_atoms(struc),
-            cutoff=7.0,
-        )
-
-        neighbor_list = [
-            (tuple(sorted([atomic_numbers[i], atomic_numbers[j]])), d)
-            for i, j, d in zip(idx_i, idx_j, dists)
-        ]
-
-        neighbor_list.sort(key=lambda x: (x[0], x[1]))
-        neighbor_groups = groupby(neighbor_list, key=lambda x: x[0])
-
-        neighbor_dict = {}
-
-        for k, group in neighbor_groups:
-            min_dist = min([g[1] for g in group])
-            neighbor_dict[k] = min_dist
-
-        for n, d in neighbor_dict.items():
-            s1 = chemical_symbols[n[0]]
-            s2 = chemical_symbols[n[1]]
-            c1 = charge_dict[s1]
-            c2 = charge_dict[s2]
-
-            try:
-                d1 = float(Element(s1).ionic_radii[c1])
-            except KeyError:
-                # print(
-                #     f"No ionic radius available for {s1}, using the atomic radius instead"
-                # )
-                d1 = float(Element(s1).atomic_radius)
-
-            try:
-                d2 = float(Element(s2).ionic_radii[c2])
-            except KeyError:
-                # print(
-                #     f"No ionic radius available for {s2}, using the atomic radius instead"
-                # )
-                d2 = float(Element(s2).atomic_radius)
+                d2 = covalent_radii[z2]
 
             radius_frac = d1 / (d1 + d2)
 
@@ -455,21 +371,22 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         mean_radius_dict = {k: np.min(v) for k, v in ionic_radii_dict.items()}
 
-        return mean_radius_dict
+        return mean_radius_dict, eq_to_Z_dict
 
     def _get_r0s(self, sub, film, charge_dict):
-        sub_radii_dict = self._get_neighborhood_info(
+        sub_radii_dict, sub_eq_to_Z_dict = self._get_neighborhood_info(
             sub,
             self.charge_dict["sub"],
         )
-        film_radii_dict = self._get_neighborhood_info(
+        film_radii_dict, film_eq_to_Z_dict = self._get_neighborhood_info(
             film,
             self.charge_dict["film"],
         )
 
         r0_dict = {"film": film_radii_dict, "sub": sub_radii_dict}
+        eq_to_Z_dict = {"film": film_eq_to_Z_dict, "sub": sub_eq_to_Z_dict}
 
-        return r0_dict
+        return r0_dict, eq_to_Z_dict
 
     def pso_function(self, x):
         cart_xy = self.get_cart_xy_shifts(x[:, :2])
@@ -508,14 +425,14 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             batch_size=1,
         )
 
-        sub_bulk_inputs = create_batch(
-            inputs=self.sub_bulk_inputs,
-            batch_size=1,
-        )
-        film_bulk_inputs = create_batch(
-            inputs=self.film_bulk_inputs,
-            batch_size=1,
-        )
+        # sub_bulk_inputs = create_batch(
+        #     inputs=self.sub_bulk_inputs,
+        #     batch_size=1,
+        # )
+        # film_bulk_inputs = create_batch(
+        #     inputs=self.film_bulk_inputs,
+        #     batch_size=1,
+        # )
 
         sub_sc_energy, _, _, _, _ = self._calculate(
             sub_sc_inputs,
@@ -537,42 +454,50 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             is_interface=False,
         )
 
-        sub_bulk_energy, _, _, _, _ = self._calculate(
-            sub_bulk_inputs,
-            is_interface=False,
-        )
-        film_bulk_energy, _, _, _, _ = self._calculate(
-            film_bulk_inputs,
-            is_interface=False,
-        )
+        # sub_bulk_energy, _, _, _, _ = self._calculate(
+        #     sub_bulk_inputs,
+        #     is_interface=False,
+        # )
+        # film_bulk_energy, _, _, _, _ = self._calculate(
+        #     film_bulk_inputs,
+        #     is_interface=False,
+        # )
 
-        N_sub_layers = self.interface.substrate.layers
-        N_film_layers = self.interface.film.layers
-        # N_sub_sc = np.abs(np.linalg.det(self.interface.match.substrate_sl_transform))
-        # N_film_sc = np.linalg.det(self.interface.match.film_sl_transform))
-        film_bulk_scale = N_film_layers
-        sub_bulk_scale = N_sub_layers
+        film_surface_energy_calc = self.surface_energy_module(
+            **self.surface_energy_kwargs["film"]
+        )
+        film_surface_energy = film_surface_energy_calc.get_cleavage_energy()
 
-        avg_film_surface_energy = (
-            film_sc_energy - (film_bulk_scale * film_bulk_energy)
-        ) / (2 * self.interface.area)
-        avg_sub_surface_energy = (
-            sub_sc_energy - (sub_bulk_scale * sub_bulk_energy)
-        ) / (2 * self.interface.area)
+        sub_surface_energy_calc = self.surface_energy_module(
+            **self.surface_energy_kwargs["sub"]
+        )
+        sub_surface_energy = sub_surface_energy_calc.get_cleavage_energy()
+
+        # N_sub_layers = self.interface.substrate.layers
+        # N_film_layers = self.interface.film.layers
+        # # N_sub_sc = np.abs(np.linalg.det(self.interface.match.substrate_sl_transform))
+        # # N_film_sc = np.linalg.det(self.interface.match.film_sl_transform))
+        # film_bulk_scale = N_film_layers
+        # sub_bulk_scale = N_sub_layers
+
+        # avg_film_surface_energy = (
+        #     film_sc_energy - (film_bulk_scale * film_bulk_energy)
+        # ) / (2 * self.interface.area)
+        # avg_sub_surface_energy = (
+        #     sub_sc_energy - (sub_bulk_scale * sub_bulk_energy)
+        # ) / (2 * self.interface.area)
 
         return (
             film_sc_energy[0],
             sub_sc_energy[0],
-            film_bulk_energy[0],
-            sub_bulk_energy[0],
-            avg_film_surface_energy[0],
-            avg_sub_surface_energy[0],
+            film_surface_energy,
+            sub_surface_energy,
             const_iface_energy[0],
         )
 
     def optimizePSO(
         self,
-        z_bounds: List[float],
+        z_bounds: Optional[List[float]] = None,
         max_iters: int = 200,
         n_particles: int = 15,
     ) -> float:
@@ -587,6 +512,9 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         Returns:
             The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
         """
+        if z_bounds is None:
+            z_bounds = [0.5, max(3.5, 1.2 * self._max_z)]
+
         opt_score, opt_pos = self._optimizerPSO(
             func=self.pso_function,
             z_bounds=z_bounds,

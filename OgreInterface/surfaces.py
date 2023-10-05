@@ -294,6 +294,50 @@ class Surface:
         return self.bulk_structure.composition.reduced_formula
 
     @property
+    def formula_with_miller(self) -> str:
+        """
+        Reduced formula of the surface and the miller index added
+
+        Examples:
+            >>> surface.latex_formula
+            >>> "CsPbBr3(1-10)
+
+        Returns:
+            Reduced formula of the underlying bulk structure with the miller index
+        """
+        return (
+            f"{self.formula}({''.join([str(i) for i in self.miller_index])})"
+        )
+
+    @property
+    def latex_formula(self) -> str:
+        """
+        Reduced formula of the surface formatted with latex
+
+        Examples:
+            >>> surface.latex_formula
+            >>> "CsPbBr$_{3}$"
+
+        Returns:
+            Reduced formula of the underlying bulk structure where subscripts are formated for latex
+        """
+        return utils.get_latex_formula(self.formula)
+
+    @property
+    def latex_formula_with_miller(self) -> str:
+        """
+        Reduced formula of the surface formatted with latex and the miller index added
+
+        Examples:
+            >>> surface.latex_formula
+            >>> "CsPbBr$_{3}$"(1$\\overline{1}$0)
+
+        Returns:
+            Reduced formula of the underlying bulk structure with the miller index where subscripts are formated for latex
+        """
+        return f"{self.latex_formula}({utils.get_miller_index_label(self.miller_index)})"
+
+    @property
     def area(self) -> float:
         """
         Cross section area of the slab in Angstroms^2

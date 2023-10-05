@@ -1546,7 +1546,7 @@ class InterfaceGenerator:
         interfaces = []
 
         print(
-            f"Generating Interfaces for Film ({self.film.termination_index}) and Substrate ({self.substrate.termination_index}):"
+            f"Generating Interfaces for {self.film.formula_with_miller}[{self.film.termination_index}] and {self.substrate.formula_with_miller}[{self.substrate.termination_index}]:"
         )
         for match in tqdm(self.match_list, dynamic_ncols=True):
             interface = Interface(
