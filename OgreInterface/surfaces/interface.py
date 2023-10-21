@@ -21,1075 +21,15 @@ from ase import Atoms
 from OgreInterface import utils
 from OgreInterface.lattice_match import OgreMatch
 from OgreInterface.plotting_tools import plot_match
+from OgreInterface.surfaces.surface import Surface
+from OgreInterface.surfaces.base_surface import BaseSurface
+from OgreInterface.surfaces.molecular_surface import MolecularSurface
 
 
 # suppress warning from CrystallNN when ionic radii are not found.
 warnings.filterwarnings("ignore", module=r"pymatgen.analysis.local_env")
 
-SelfSurface = TypeVar("SelfSurface", bound="Surface")
 SelfInterface = TypeVar("SelfInterface", bound="Interface")
-
-
-class Surface:
-    """Container for surfaces generated with the SurfaceGenerator
-
-    The Surface class and will be used as an input to the InterfaceGenerator class,
-    and it should be create exclusively using the SurfaceGenerator.
-
-    Examples:
-        Generating a surface with pseudo-hydrogen passivation where the atomic positions of the hydrogens need to be relaxed using DFT.
-        >>> from OgreInterface.generate import SurfaceGenerator
-        >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=5, vacuum=60)
-        >>> surface = surfaces[0] # OgreInterface.Surface object
-        >>> surface.passivate(bot=True, top=True)
-        >>> surface.write_file(output="POSCAR_slab", orthogonal=True, relax=True) # relax=True will automatically set selective dynamics=True for all passivating hydrogens
-
-        Generating a surface with pseudo-hydrogen passivation that comes from a structure with pre-relaxed pseudo-hydrogens.
-        >>> from OgreInterface.generate import SurfaceGenerator
-        >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=20, vacuum=60)
-        >>> surface = surfaces[0] # OgreInterface.Surface object
-        >>> surface.passivate(bot=True, top=True, passivated_struc="CONTCAR") # CONTCAR is the output of the structural relaxation
-        >>> surface.write_file(output="POSCAR_slab", orthogonal=True, relax=False)
-
-    Args:
-        orthogonal_slab: Slab structure that is forced to have an c lattice vector that is orthogonal
-            to the inplane lattice vectors
-        non_orthogonal_slab: Slab structure that is not gaurunteed to have an orthogonal c lattice vector,
-            and assumes the same basis as the primitive_oriented_bulk structure.
-        oriented_bulk: Structure of the smallest building block of the slab, which was used to
-            construct the non_orthogonal_slab supercell by creating a (1x1xN) supercell where N in the number
-            of layers.
-        bulk: Bulk structure that can be transformed into the slab basis using the transformation_matrix
-        transformation_matrix: 3x3 integer matrix that used to change from the bulk basis to the slab basis.
-        miller_index: Miller indices of the surface, with respect to the conventional bulk structure.
-        layers: Number of unit cell layers in the surface
-        vacuum: Size of the vacuum in Angstroms
-        uvw_basis: Miller indices corresponding to the lattice vector directions of the slab
-        point_group_operations: List of unique point group operations that will eventually be used to efficiently
-            filter out symmetrically equivalent interfaces found using the lattice matching algorithm.
-        bottom_layer_dist: z-distance of where the next atom should be if the slab structure were to continue downwards
-            (This is used to automatically approximate the interfacial distance in interfacial_distance is set to None in the InterfaceGenerator)
-        top_layer_dist: z-distance of where the next atom should be if the slab structure were to continue upwards
-            (This is used to automatically approximate the interfacial distance in interfacial_distance is set to None in the InterfaceGenerator)
-        termination_index: Index of the Surface in the list of Surfaces produced by the SurfaceGenerator
-        surface_normal (np.ndarray): The normal vector of the surface
-        c_projection (float): The projections of the c-lattice vector onto the surface normal
-
-    Attributes:
-        oriented_bulk_structure: Pymatgen Structure of the smallest building block of the slab, which was used to
-            construct the non_orthogonal_slab supercell by creating a (1x1xN) supercell where N in the number
-            of layers.
-        oriented_bulk_atoms (Atoms): ASE Atoms of the smallest building block of the slab, which was used to
-            construct the non_orthogonal_slab supercell by creating a (1x1xN) supercell where N in the number
-            of layers.
-        bulk_structure (Structure): Bulk Pymatgen Structure that can be transformed into the slab basis using the transformation_matrix
-        bulk_atoms (Atoms): Bulk ASE Atoms that can be transformed into the slab basis using the transformation_matrix
-        transformation_matrix (np.ndarray): 3x3 integer matrix that used to change from the bulk basis to the slab basis.
-        miller_index (list): Miller indices of the surface, with respect to the conventional bulk structure.
-        layers (int): Number of unit cell layers in the surface
-        vacuum (float): Size of the vacuum in Angstroms
-        uvw_basis (np.ndarray): Miller indices corresponding to the lattice vector directions of the slab
-        point_group_operations (np.ndarray): List of unique point group operations that will eventually be used to efficiently
-            filter out symmetrically equivalent interfaces found using the lattice matching algorithm.
-        bottom_layer_dist (float): z-distance of where the next atom should be if the slab structure were to continue downwards
-            (This is used to automatically approximate the interfacial distance in interfacial_distance is set to None in the InterfaceGenerator)
-        top_layer_dist (float): z-distance of where the next atom should be if the slab structure were to continue upwards
-            (This is used to automatically approximate the interfacial distance in interfacial_distance is set to None in the InterfaceGenerator)
-        termination_index (int): Index of the Surface in the list of Surfaces produced by the SurfaceGenerator
-        surface_normal (np.ndarray): The normal vector of the surface
-        c_projection (float): The projections of the c-lattice vector onto the surface normal
-    """
-
-    def __init__(
-        self,
-        orthogonal_slab: Union[Structure, Atoms],
-        non_orthogonal_slab: Union[Structure, Atoms],
-        oriented_bulk: Union[Structure, Atoms],
-        bulk: Union[Structure, Atoms],
-        transformation_matrix: np.ndarray,
-        miller_index: list,
-        layers: int,
-        vacuum: float,
-        uvw_basis: np.ndarray,
-        point_group_operations: np.ndarray,
-        bottom_layer_dist: float,
-        top_layer_dist: float,
-        termination_index: int,
-        surface_normal: np.ndarray,
-        c_projection: int,
-    ) -> None:
-        (
-            self._orthogonal_slab_structure,
-            self._orthogonal_slab_atoms,
-        ) = self._get_atoms_and_struc(orthogonal_slab)
-        (
-            self._non_orthogonal_slab_structure,
-            self._non_orthogonal_slab_atoms,
-        ) = self._get_atoms_and_struc(non_orthogonal_slab)
-        (
-            self.oriented_bulk_structure,
-            self.oriented_bulk_atoms,
-        ) = self._get_atoms_and_struc(oriented_bulk)
-        (
-            self.bulk_structure,
-            self.bulk_atoms,
-        ) = self._get_atoms_and_struc(bulk)
-
-        self.surface_normal = surface_normal
-        self.c_projection = c_projection
-        self._transformation_matrix = transformation_matrix
-        self.miller_index = miller_index
-        self.layers = layers
-        self.vacuum = vacuum
-        self.uvw_basis = uvw_basis
-        self.point_group_operations = point_group_operations
-        self.bottom_layer_dist = bottom_layer_dist
-        self.top_layer_dist = top_layer_dist
-        self.termination_index = termination_index
-        self._passivated = False
-
-    def get_surface(
-        self,
-        orthogonal: bool = True,
-        return_atoms: bool = False,
-    ) -> Union[Atoms, Structure]:
-        """
-        This is a simple function for easier access to the surface structure generated from the SurfaceGenerator
-
-        Args:
-            orthogonal: Determines if the orthogonalized structure is returned
-            return_atoms: Determines if the ASE Atoms object is returned
-
-        Returns:
-            Either a Pymatgen Structure of ASE Atoms object of the surface structure
-        """
-
-        if orthogonal:
-            return_struc = self._orthogonal_slab_structure
-        else:
-            return_struc = self._non_orthogonal_slab_structure
-
-        if "molecules" in return_struc.site_properties:
-            return_struc = utils.add_molecules(return_struc)
-
-        if return_atoms:
-            return utils.get_atoms(return_struc)
-        else:
-            return return_struc
-
-    def get_layer_indices(
-        self, layer: int, atomic_layers: bool = True
-    ) -> np.ndarray:
-        """
-        This function is used to extract the atom-indicies of specific layers of the surface.
-
-        Examples:
-            >>> surface.get_layer_indices(layer=0)
-            >>> [0 1 2 3]
-
-        Args:
-            layer: The layer number of the surface which you would like to get atom-indices for.
-            atomic_layers: Determines if it is in terms of atomic layers or unit cell layers
-
-        Returns:
-            A numpy array of integer indices corresponding to the atom index of the surface structure
-        """
-        if atomic_layers:
-            layer_key = "atomic_layer_index"
-        else:
-            layer_key = "layer_index"
-
-        surface = self._non_orthogonal_slab_structure
-        site_props = surface.site_properties
-        layer_index = np.array(site_props[layer_key])
-        return np.where(layer_index == layer)[0]
-
-    @property
-    def top_surface_charge(self) -> float:
-        frac_coords = self.oriented_bulk_structure.frac_coords
-        mod_frac_coords = np.mod(np.round(frac_coords[:, -1], 5), 1.0)
-        mod_frac_coords += 1.0 - mod_frac_coords.max()
-
-        charges = np.array(
-            self.oriented_bulk_structure.site_properties["charge"]
-        )
-
-        z_frac = 1 - mod_frac_coords
-
-        return np.round((charges * z_frac).sum(), 4)
-
-    @property
-    def bottom_surface_charge(self) -> float:
-        frac_coords = self.oriented_bulk_structure.frac_coords
-
-        mod_frac_coords = np.mod(np.round(frac_coords[:, -1], 5), 1.0)
-        mod_frac_coords -= mod_frac_coords.min()
-
-        charges = np.array(
-            self.oriented_bulk_structure.site_properties["charge"]
-        )
-        z_frac = mod_frac_coords
-
-        return np.round((charges * z_frac).sum(), 4)
-
-    @property
-    def atomic_layers(self) -> int:
-        """
-        This function will return the number of atomic layers in the slab
-        """
-        return int(
-            max(
-                self._non_orthogonal_slab_structure.site_properties[
-                    "atomic_layer_index"
-                ]
-            )
-            + 1
-        )
-
-    @property
-    def slab_transformation_matrix(self) -> np.ndarray:
-        """
-        Transformation matrix to convert the primitive bulk lattice vectors to the
-        slab supercell lattice vectors (including the vacuum region)
-
-        Examples:
-            >>> surface.slab_transformation_matrix
-            >>> [[ -1   1   0]
-            ...  [  0   0   1]
-            ...  [ 15  15 -15]]
-        """
-        layer_mat = np.eye(3)
-        layer_mat[-1, -1] = self.layers + np.round(
-            self.vacuum / self.c_projection
-        )
-
-        return (layer_mat @ self._transformation_matrix).astype(int)
-
-    @property
-    def bulk_transformation_matrix(self) -> np.ndarray:
-        """
-        Transformation matrix to convert the primitive bulk unit cell to the smallest
-        oriented unit cell of the slab structure
-
-        Examples:
-            >>> surface.bulk_transformation_matrix
-            >>> [[ -1   1   0]
-            ...  [  0   0   1]
-            ...  [  1   1  -1]]
-        """
-        return self._transformation_matrix.astype(int)
-
-    @property
-    def formula(self) -> str:
-        """
-        Reduced formula of the surface
-
-        Examples:
-            >>> surface.formula
-            >>> "InAs"
-
-        Returns:
-            Reduced formula of the underlying bulk structure
-        """
-        return self.bulk_structure.composition.reduced_formula
-
-    @property
-    def formula_with_miller(self) -> str:
-        """
-        Reduced formula of the surface and the miller index added
-
-        Examples:
-            >>> surface.latex_formula
-            >>> "CsPbBr3(1-10)
-
-        Returns:
-            Reduced formula of the underlying bulk structure with the miller index
-        """
-        return (
-            f"{self.formula}({''.join([str(i) for i in self.miller_index])})"
-        )
-
-    @property
-    def latex_formula(self) -> str:
-        """
-        Reduced formula of the surface formatted with latex
-
-        Examples:
-            >>> surface.latex_formula
-            >>> "CsPbBr$_{3}$"
-
-        Returns:
-            Reduced formula of the underlying bulk structure where subscripts are formated for latex
-        """
-        return utils.get_latex_formula(self.formula)
-
-    @property
-    def latex_formula_with_miller(self) -> str:
-        """
-        Reduced formula of the surface formatted with latex and the miller index added
-
-        Examples:
-            >>> surface.latex_formula
-            >>> "CsPbBr$_{3}$"(1$\\overline{1}$0)
-
-        Returns:
-            Reduced formula of the underlying bulk structure with the miller index where subscripts are formated for latex
-        """
-        return f"{self.latex_formula}({utils.get_miller_index_label(self.miller_index)})"
-
-    @property
-    def area(self) -> float:
-        """
-        Cross section area of the slab in Angstroms^2
-
-        Examples:
-            >>> surface.area
-            >>> 62.51234
-
-        Returns:
-            Cross-section area in Angstroms^2
-        """
-        area = np.linalg.norm(
-            np.cross(
-                self._orthogonal_slab_structure.lattice.matrix[0],
-                self._orthogonal_slab_structure.lattice.matrix[1],
-            )
-        )
-
-        return area
-
-    @property
-    def inplane_vectors(self) -> np.ndarray:
-        """
-        In-plane cartesian vectors of the slab structure
-
-        Examples:
-            >>> surface.inplane_vectors
-            >>> [[4.0 0.0 0.0]
-            ...  [2.0 2.0 0.0]]
-
-        Returns:
-            (2, 3) numpy array containing the cartesian coordinates of the in-place lattice vectors
-        """
-        matrix = deepcopy(self._orthogonal_slab_structure.lattice.matrix)
-        return matrix[:2]
-
-    @property
-    def miller_index_a(self) -> np.ndarray:
-        """
-        Miller index of the a-lattice vector
-
-        Examples:
-            >>> surface.miller_index_a
-            >>> [-1 1 0]
-
-        Returns:
-            (3,) numpy array containing the miller indices
-        """
-        return self.uvw_basis[0].astype(int)
-
-    @property
-    def miller_index_b(self) -> np.ndarray:
-        """
-        Miller index of the b-lattice vector
-
-        Examples:
-            >>> surface.miller_index_b
-            >>> [1 -1 0]
-
-        Returns:
-            (3,) numpy array containing the miller indices
-        """
-        return self.uvw_basis[1].astype(int)
-
-    def _get_atoms_and_struc(self, atoms_or_struc) -> Tuple[Structure, Atoms]:
-        if type(atoms_or_struc) == Atoms:
-            init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
-            init_atoms = atoms_or_struc
-        elif type(atoms_or_struc) == Structure:
-            init_structure = atoms_or_struc
-            init_atoms = AseAtomsAdaptor.get_atoms(atoms_or_struc)
-        else:
-            raise TypeError(
-                f"Surface._get_atoms_and_struc() accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
-            )
-
-        return init_structure, init_atoms
-
-    def write_file(
-        self,
-        output: str = "POSCAR_slab",
-        orthogonal: bool = True,
-        relax: bool = False,
-    ) -> None:
-        """
-        Writes a POSCAR file of the surface with important information about the slab such as the number of layers, the termination index, and pseudo-hydrogen charges
-
-        Examples:
-            Writing a POSCAR file for a static DFT calculation:
-            >>> surface.write_file(output="POSCAR", orthogonal=True, relax=False)
-
-            Writing a passivated POSCAR file that needs to be relaxed using DFT:
-            >>> surface.write_file(output="POSCAR", orthogonal=True, relax=True)
-
-
-        Args:
-            orthogonal: Determines the the output slab is forced to have a c-vector that is orthogonal to the a and b lattice vectors
-            output: File path of the POSCAR
-            relax: Determines if selective dynamics should be set in the POSCAR
-        """
-        if orthogonal:
-            slab = self._orthogonal_slab_structure
-        else:
-            slab = self._non_orthogonal_slab_structure
-
-        if "molecules" in slab.site_properties:
-            slab = utils.add_molecules(slab)
-
-        comment = "|".join(
-            [
-                f"L={self.layers}",
-                f"T={self.termination_index}",
-                f"O={orthogonal}",
-            ]
-        )
-
-        if not self._passivated:
-            poscar_str = Poscar(slab, comment=comment).get_string()
-        else:
-            if relax:
-                atomic_numbers = np.array(slab.atomic_numbers)
-                selective_dynamics = np.repeat(
-                    (atomic_numbers == 1).reshape(-1, 1),
-                    repeats=3,
-                    axis=1,
-                )
-            else:
-                selective_dynamics = None
-
-            syms = [site.specie.symbol for site in slab]
-
-            syms = []
-            for site in slab:
-                if site.specie.symbol == "H":
-                    if hasattr(site.specie, "oxi_state"):
-                        oxi = site.specie.oxi_state
-
-                        if oxi < 1.0 and oxi != 0.5:
-                            H_str = "H" + f"{oxi:.2f}"[1:]
-                        elif oxi == 0.5:
-                            H_str = "H.5"
-                        elif oxi > 1.0 and oxi != 1.5:
-                            H_str = "H" + f"{oxi:.2f}"
-                        elif oxi == 1.5:
-                            H_str = "H1.5"
-                        else:
-                            H_str = "H"
-
-                        syms.append(H_str)
-                else:
-                    syms.append(site.specie.symbol)
-
-            comp_list = [(a[0], len(list(a[1]))) for a in groupby(syms)]
-            atom_types, n_atoms = zip(*comp_list)
-
-            new_atom_types = []
-            for atom in atom_types:
-                if "H" == atom[0] and atom not in ["Hf", "Hs", "Hg", "He"]:
-                    new_atom_types.append("H")
-                else:
-                    new_atom_types.append(atom)
-
-            comment += "|potcar=" + " ".join(atom_types)
-
-            poscar = Poscar(slab, comment=comment)
-
-            if relax:
-                poscar.selective_dynamics = selective_dynamics
-
-            poscar_str = poscar.get_string().split("\n")
-            poscar_str[5] = " ".join(new_atom_types)
-            poscar_str[6] = " ".join(list(map(str, n_atoms)))
-            poscar_str = "\n".join(poscar_str)
-
-        with open(output, "w") as f:
-            f.write(poscar_str)
-
-    def remove_layers(
-        self,
-        num_layers: int,
-        top: bool = False,
-        atol: Union[float, None] = None,
-    ) -> None:
-        """
-        Removes atomic layers from a specified side of the surface. Using this function will ruin the pseudo-hydrogen passivation
-        for the side that has layers removed, so it would be prefered to just select a different termination from the list of Surfaces
-        generated using the SurfaceGenerator instead of manually removing layers to get the termination you want.
-
-        Examples:
-            Removing 3 layers from the top of a surface:
-            >>> surface.remove_layers(num_layers=3, top=True)
-
-        Args:
-            num_layers: Number of atomic layers to remove
-            top: Determines of the layers are removed from the top of the slab or the bottom if False
-            atol: Tolarence for grouping the layers, if None, it is automatically determined and usually performs well
-        """
-        group_inds_conv, _ = utils.group_layers(
-            structure=self._orthogonal_slab_structure, atol=atol
-        )
-        if top:
-            group_inds_conv = group_inds_conv[::-1]
-
-        to_delete_conv = []
-        for i in range(num_layers):
-            to_delete_conv.extend(group_inds_conv[i])
-
-        self._orthogonal_slab_structure.remove_sites(to_delete_conv)
-
-    def _get_surface_atoms(self, cutoff: float) -> Tuple[Structure, List]:
-        obs = self.oriented_bulk_structure.copy()
-        obs.add_oxidation_state_by_guess()
-
-        layer_struc = utils.get_layer_supercelll(structure=obs, layers=3)
-        layer_struc.sort()
-
-        layer_inds = np.array(layer_struc.site_properties["layer_index"])
-
-        bottom_inds = np.where(layer_inds == 0)[0]
-        top_inds = np.where(layer_inds == np.max(layer_inds))[0]
-
-        cnn = CrystalNN(search_cutoff=cutoff)
-        # cnn = BrunnerNN_real(cutoff=3.0)
-        top_neighborhood = []
-        for i in top_inds:
-            info_dict = cnn.get_nn_info(layer_struc, i)
-            for neighbor in info_dict:
-                if neighbor["image"][-1] > 0:
-                    top_neighborhood.append((i, info_dict))
-                    break
-
-        bottom_neighborhood = []
-        for i in bottom_inds:
-            info_dict = cnn.get_nn_info(layer_struc, i)
-            for neighbor in info_dict:
-                if neighbor["image"][-1] < 0:
-                    bottom_neighborhood.append((i, info_dict))
-                    break
-
-        neighborhool_list = [bottom_neighborhood, top_neighborhood]
-
-        return layer_struc, neighborhool_list
-
-    def _get_pseudohydrogen_charge(
-        self,
-        site,
-        coordination,
-        include_d_valence: bool = True,
-        manual_oxidation_states: Union[Dict[str, float], None] = None,
-    ) -> float:
-        electronic_struc = site.specie.electronic_structure.split(".")[1:]
-
-        # TODO automate anion/cation determination
-        if manual_oxidation_states:
-            species_str = str(site.specie._el)
-            oxi_state = manual_oxidation_states[species_str]
-        else:
-            oxi_state = site.specie.oxi_state
-
-        valence = 0
-        for orb in electronic_struc:
-            if include_d_valence:
-                if orb[1] == "d":
-                    if int(orb[2:]) < 10:
-                        valence += int(orb[2:])
-                else:
-                    valence += int(orb[2:])
-            else:
-                if orb[1] != "d":
-                    valence += int(orb[2:])
-
-        if oxi_state < 0:
-            charge = (8 - valence) / coordination
-        else:
-            charge = ((2 * coordination) - valence) / coordination
-
-        available_charges = np.array(
-            [
-                0.25,
-                0.33,
-                0.42,
-                0.5,
-                0.58,
-                0.66,
-                0.75,
-                1.00,
-                1.25,
-                1.33,
-                1.50,
-                1.66,
-                1.75,
-            ]
-        )
-
-        closest_charge = np.abs(charge - available_charges)
-        min_diff = np.isclose(closest_charge, closest_charge.min())
-        charge = np.min(available_charges[min_diff])
-
-        return charge
-
-    def _get_bond_dict(
-        self,
-        cutoff: float,
-        include_d_valence: bool,
-        manual_oxidation_states,
-    ) -> Dict[str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]]:
-        image_map = {1: "+", 0: "=", -1: "-"}
-        (
-            layer_struc,
-            surface_neighborhoods,
-        ) = self._get_surface_atoms(cutoff)
-
-        labels = ["bottom", "top"]
-        bond_dict = {"bottom": {}, "top": {}}
-        H_len = 0.31
-
-        for i, neighborhood in enumerate(surface_neighborhoods):
-            for surface_atom in neighborhood:
-                atom_index = surface_atom[0]
-                center_atom_equiv_index = layer_struc[atom_index].properties[
-                    "oriented_bulk_equivalent"
-                ]
-
-                try:
-                    center_len = CovalentRadius.radius[
-                        layer_struc[atom_index].specie.symbol
-                    ]
-                except KeyError:
-                    center_len = layer_struc[atom_index].specie.atomic_radius
-
-                oriented_bulk_equivalent = layer_struc[atom_index].properties[
-                    "oriented_bulk_equivalent"
-                ]
-                neighbor_info = surface_atom[1]
-                coordination = len(neighbor_info)
-                charge = self._get_pseudohydrogen_charge(
-                    layer_struc[atom_index],
-                    coordination,
-                    include_d_valence,
-                    manual_oxidation_states,
-                )
-                broken_atoms = [
-                    neighbor
-                    for neighbor in neighbor_info
-                    if neighbor["image"][-1] != 0
-                ]
-
-                bonds = []
-                bond_strs = []
-                for atom in broken_atoms:
-                    broken_site = atom["site"]
-                    broken_atom_equiv_index = broken_site.properties[
-                        "oriented_bulk_equivalent"
-                    ]
-                    broken_image = np.array(broken_site.image).astype(int)
-                    broken_atom_cart_coords = broken_site.coords
-                    center_atom_cart_coords = layer_struc[atom_index].coords
-                    bond_vector = (
-                        broken_atom_cart_coords - center_atom_cart_coords
-                    )
-                    norm_vector = bond_vector / np.linalg.norm(bond_vector)
-                    H_vector = (H_len + center_len) * norm_vector
-
-                    H_str = ",".join(
-                        [
-                            str(center_atom_equiv_index),
-                            str(broken_atom_equiv_index),
-                            "".join([image_map[i] for i in broken_image]),
-                            str(i),  # top or bottom bottom=0, top=1
-                        ]
-                    )
-
-                    bonds.append(H_vector)
-                    bond_strs.append(H_str)
-
-                bond_dict[labels[i]][oriented_bulk_equivalent] = {
-                    "bonds": np.vstack(bonds),
-                    "bond_strings": bond_strs,
-                    "charge": charge,
-                }
-
-        return bond_dict
-
-    def _get_passivation_atom_index(
-        self, struc, bulk_equivalent, top=False
-    ) -> int:
-        struc_layer_index = np.array(struc.site_properties["layer_index"])
-        struc_bulk_equiv = np.array(
-            struc.site_properties["oriented_bulk_equivalent"]
-        )
-
-        if top:
-            layer_number = np.max(struc_layer_index)
-        else:
-            layer_number = 0
-
-        atom_index = np.where(
-            np.logical_and(
-                struc_layer_index == layer_number,
-                struc_bulk_equiv == bulk_equivalent,
-            )
-        )[0][0]
-
-        return atom_index
-
-    def _passivate(self, struc, index, bond, bond_str, charge) -> None:
-        position = struc[index].coords + bond
-        frac_coords = np.mod(
-            np.round(struc.lattice.get_fractional_coords(position), 6), 1
-        )
-        props = {k: -1 for k in struc[index].properties}
-        props["hydrogen_str"] = f"{index}," + bond_str
-
-        struc.append(
-            Species("H", oxidation_state=charge),
-            coords=frac_coords,
-            coords_are_cartesian=False,
-            properties=props,
-        )
-
-    def _get_passivated_bond_dict(
-        self,
-        bond_dict: Dict[
-            str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]
-        ],
-        relaxed_structure_file: str,
-    ) -> Dict[str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]]:
-        # Load in the relaxed structure file to get the description string
-        with open(relaxed_structure_file, "r") as f:
-            poscar_str = f.read().split("\n")
-
-        # Get the description string at the top of the POSCAR/CONTCAR
-        desc_str = poscar_str[0].split("|")
-
-        # Extract the number of layers
-        layers = int(desc_str[0].split("=")[1])
-
-        # Extract the termination index
-        termination_index = int(desc_str[1].split("=")[1])
-
-        # If the termination index is the same the proceed with passivation
-        if termination_index == self.termination_index:
-            # Extract the structure
-            structure = Structure.from_file(relaxed_structure_file)
-
-            # Make a copy of the oriented bulk structure
-            obs = self.oriented_bulk_structure.copy()
-
-            # Add oxidation states for the passivation
-            obs.add_oxidation_state_by_guess()
-
-            # If the OBS is left handed make it right handed like the pymatgen Poscar class does
-            is_negative = np.linalg.det(obs.lattice.matrix) < 0
-
-            if is_negative:
-                structure = Structure(
-                    lattice=Lattice(structure.lattice.matrix * -1),
-                    species=structure.species,
-                    coords=structure.frac_coords,
-                )
-
-            # Reproduce the passivated structure
-            vacuum_scale = 4
-            layer_struc = utils.get_layer_supercelll(
-                structure=obs, layers=layers, vacuum_scale=vacuum_scale
-            )
-
-            center_shift = 0.5 * (vacuum_scale / (vacuum_scale + layers))
-            layer_struc.translate_sites(
-                indices=range(len(layer_struc)),
-                vector=[0, 0, center_shift],
-                frac_coords=True,
-                to_unit_cell=True,
-            )
-
-            layer_struc.sort()
-
-            # Add hydrogen_str propery. This avoids the PyMatGen warning
-            layer_struc.add_site_property(
-                "hydrogen_str", [-1] * len(layer_struc)
-            )
-
-            # Add a site propery indexing each atom before the passivation is applied
-            layer_struc.add_site_property(
-                "pre_passivation_index", list(range(len(layer_struc)))
-            )
-
-            # Get top and bottom species to determine if the layer_struc should be
-            # passivated on the top or bottom of the structure
-            atomic_numbers = structure.atomic_numbers
-            top_species = atomic_numbers[
-                np.argmax(structure.frac_coords[:, -1])
-            ]
-            bot_species = atomic_numbers[
-                np.argmin(structure.frac_coords[:, -1])
-            ]
-
-            # If the top species is a Hydrogen then passivate the top
-            if top_species == 1:
-                for bulk_equiv, bonds in bond_dict["top"].items():
-                    ortho_index = self._get_passivation_atom_index(
-                        struc=layer_struc, bulk_equivalent=bulk_equiv, top=True
-                    )
-
-                    for bond, bond_str in zip(
-                        bonds["bonds"], bonds["bond_strings"]
-                    ):
-                        self._passivate(
-                            layer_struc,
-                            ortho_index,
-                            bond,
-                            bond_str,
-                            bonds["charge"],
-                        )
-
-            # If the bottom species is a Hydrogen then passivate the bottom
-            if bot_species == 1:
-                for bulk_equiv, bonds in bond_dict["bottom"].items():
-                    ortho_index = self._get_passivation_atom_index(
-                        struc=layer_struc,
-                        bulk_equivalent=bulk_equiv,
-                        top=False,
-                    )
-
-                    for bond, bond_str in zip(
-                        bonds["bonds"], bonds["bond_strings"]
-                    ):
-                        self._passivate(
-                            layer_struc,
-                            ortho_index,
-                            bond,
-                            bond_str,
-                            bonds["charge"],
-                        )
-
-            layer_struc.sort()
-
-            shifts = np.array(
-                [
-                    [0, 0, 0],
-                    [1, 0, 0],
-                    [0, 1, 0],
-                    [1, 1, 0],
-                    [-1, 1, 0],
-                    [1, -1, 0],
-                    [-1, -1, 0],
-                    [-1, 0, 0],
-                    [0, -1, 0],
-                ]
-            ).dot(structure.lattice.matrix)
-
-            # Get the index if the hydrogens
-            hydrogen_index = np.where(np.array(structure.atomic_numbers) == 1)[
-                0
-            ]
-
-            # Get the bond strings from the passivated structure
-            bond_strs = layer_struc.site_properties["hydrogen_str"]
-
-            # Get the index of sites before passivation
-            pre_pas_inds = layer_struc.site_properties["pre_passivation_index"]
-
-            # The bond center of the hydrogens are the first element of the bond string
-            pre_pas_bond_centers = [
-                int(bond_strs[i].split(",")[0]) for i in hydrogen_index
-            ]
-
-            # Map the pre-passivation bond index to the actual index in the passivated structure
-            post_pas_bond_centers = [
-                pre_pas_inds.index(i) for i in pre_pas_bond_centers
-            ]
-
-            # Get the coordinates of the bond centers in the actual relaxed structure
-            # and the recreated ideal passivated structure
-            relaxed_bond_centers = structure.cart_coords[post_pas_bond_centers]
-            ideal_bond_centers = layer_struc.cart_coords[post_pas_bond_centers]
-
-            # Get the coordinates of the hydrogens in the actual relaxed structure
-            # and the recreated ideal passivated structure
-            relaxed_hydrogens = structure.cart_coords[hydrogen_index]
-            ideal_hydrogens = layer_struc.cart_coords[hydrogen_index]
-
-            # Substract the bond center positions from the hydrogen positions to get only the bond vector
-            relaxed_hydrogens -= relaxed_bond_centers
-            ideal_hydrogens -= ideal_bond_centers
-
-            # Mapping to accessing the bond_dict
-            top_bot_dict = {1: "top", 0: "bottom"}
-
-            # Lopp through the matching hydrogens and indices to get the difference between the bond vectors
-            for H_ind, H_ideal, H_relaxed in zip(
-                hydrogen_index, ideal_hydrogens, relaxed_hydrogens
-            ):
-                # Find all periodic shifts of the relaxed hydrogens
-                relaxed_shifts = H_relaxed + shifts
-
-                # Find the difference between the ideal hydrogens and all 3x3 periodic images of the relaxed hydrogen
-                diffs = relaxed_shifts - H_ideal
-
-                # Find the length of the bond difference vectors
-                norm_diffs = np.linalg.norm(diffs, axis=1)
-
-                # Find the difference vector between the ideal hydrogen and the closest relaxed hydrogen image
-                bond_diff = diffs[np.argmin(norm_diffs)]
-
-                # Get the bond string of the hydrogen
-                bond_str = bond_strs[H_ind].split(",")
-
-                # Extract the side from the bond string (the last element)
-                side = top_bot_dict[int(bond_str[-1])]
-
-                # Get the center index
-                center_ind = int(bond_str[1])
-
-                # Extract the bond info from the bond_dict
-                bond_info = bond_dict[side][center_ind]
-
-                # Find which bond this hydrogen corresponds to
-                bond_ind = bond_info["bond_strings"].index(
-                    ",".join(bond_str[1:])
-                )
-
-                # Add the bond diff to the bond to get the relaxed position
-                bond_dict[side][center_ind]["bonds"][bond_ind] += bond_diff
-
-            return bond_dict
-        else:
-            raise ValueError(
-                f"This is not the same termination. The passivated structure has termination={termination_index}, and the current surface has termination={self.termination_index}"
-            )
-
-    def passivate(
-        self,
-        bottom: bool = True,
-        top: bool = True,
-        cutoff: float = 4.0,
-        passivated_struc: Union[str, None] = None,
-        include_d_valence: bool = True,
-        manual_oxidation_states: Union[Dict[str, float], None] = None,
-    ) -> None:
-        """
-        This function will apply pseudohydrogen passivation to all broken bonds on the surface and assign charges to the pseudo-hydrogens based
-        on the equations provided in https://doi.org/10.1103/PhysRevB.85.195328. The identification of the local coordination environments is
-        provided using CrystalNN in Pymatgen which is based on https://doi.org/10.1021/acs.inorgchem.0c02996.
-
-        Examples:
-            Initial passivation:
-            >>> surface.passivate(bottom=True, top=True)
-
-            Relaxed passivation from a CONTCAR file:
-            >>> surface.passivate(bottom=True, top=True, passivated_struc="CONTCAR")
-
-        Args:
-            bottom: Determines if the bottom of the structure should be passivated
-            top: Determines of the top of the structure should be passivated
-            cutoff: Determines the cutoff in Angstroms for the nearest neighbor search. 3.0 seems to give reasonalble reasults.
-            passivated_struc: File path to the CONTCAR/POSCAR file that contains the relaxed atomic positions of the pseudo-hydrogens.
-                This structure must have the same miller index and termination index.
-            include_d_valence: (DO NOT CHANGE FROM DEFAULT, THIS IS ONLY FOR DEBUGING) Determines if the d-orbital electrons are included the calculation of the pseudohydrogen charge.
-            manual_oxidation_states:  (DO NOT CHANGE FROM DEFAULT, THIS IS ONLY FOR DEBUGING) Option to pass in a dictionary determining which elements are anions vs cations.
-                This will be automated hopefully at some point.
-                (i.e {"Ti": 1, "Mn": 1, "In": -1} would mean Ti and Mn are cations and In is an anion)
-        """
-        bond_dict = self._get_bond_dict(
-            cutoff, include_d_valence, manual_oxidation_states
-        )
-
-        if passivated_struc is not None:
-            bond_dict = self._get_passivated_bond_dict(
-                bond_dict=bond_dict, relaxed_structure_file=passivated_struc
-            )
-
-        ortho_slab = self._orthogonal_slab_structure.copy()
-        non_ortho_slab = self._non_orthogonal_slab_structure.copy()
-        ortho_slab.add_site_property("hydrogen_str", [-1] * len(ortho_slab))
-        non_ortho_slab.add_site_property(
-            "hydrogen_str", [-1] * len(non_ortho_slab)
-        )
-
-        if top:
-            for bulk_equiv, bonds in bond_dict["top"].items():
-                ortho_index = self._get_passivation_atom_index(
-                    struc=ortho_slab, bulk_equivalent=bulk_equiv, top=True
-                )
-                non_ortho_index = self._get_passivation_atom_index(
-                    struc=non_ortho_slab, bulk_equivalent=bulk_equiv, top=True
-                )
-
-                for bond, bond_str in zip(
-                    bonds["bonds"], bonds["bond_strings"]
-                ):
-                    self._passivate(
-                        ortho_slab,
-                        ortho_index,
-                        bond,
-                        bond_str,
-                        bonds["charge"],
-                    )
-                    self._passivate(
-                        non_ortho_slab,
-                        non_ortho_index,
-                        bond,
-                        bond_str,
-                        bonds["charge"],
-                    )
-
-        if bottom:
-            for bulk_equiv, bonds in bond_dict["bottom"].items():
-                ortho_index = self._get_passivation_atom_index(
-                    struc=ortho_slab, bulk_equivalent=bulk_equiv, top=False
-                )
-                non_ortho_index = self._get_passivation_atom_index(
-                    struc=non_ortho_slab, bulk_equivalent=bulk_equiv, top=False
-                )
-
-                for bond, bond_str in zip(
-                    bonds["bonds"], bonds["bond_strings"]
-                ):
-                    self._passivate(
-                        ortho_slab,
-                        ortho_index,
-                        bond,
-                        bond_str,
-                        bonds["charge"],
-                    )
-                    self._passivate(
-                        non_ortho_slab,
-                        non_ortho_index,
-                        bond,
-                        bond_str,
-                        bonds["charge"],
-                    )
-
-        ortho_slab.sort()
-        non_ortho_slab.sort()
-
-        ortho_slab.remove_site_property("hydrogen_str")
-        non_ortho_slab.remove_site_property("hydrogen_str")
-
-        self._passivated = True
-        self._orthogonal_slab_structure = ortho_slab
-        self._non_orthogonal_slab_structure = non_ortho_slab
-
-    def get_termination(self):
-        """
-        Returns the termination of the surface as a dictionary
-
-        Examples:
-            >>> surface.get_termination()
-            >>> {"bottom": {"In": 1, "As": 0}, "top": {"In": 0, "As": 1}
-        """
-        raise NotImplementedError
 
 
 class Interface:
@@ -1117,8 +57,8 @@ class Interface:
 
     def __init__(
         self,
-        substrate: Union[Surface, SelfInterface],
-        film: Union[Surface, SelfInterface],
+        substrate: Union[Surface, MolecularSurface, SelfInterface],
+        film: Union[Surface, MolecularSurface, SelfInterface],
         match: OgreMatch,
         interfacial_distance: float,
         vacuum: float,
@@ -1179,8 +119,8 @@ class Interface:
         ) = self._stack_interface()
         self._a_shift = 0.0
         self._b_shift = 0.0
-        self.bottom_layer_dist = self.substrate.bottom_layer_dist
-        self.top_layer_dist = self.film.top_layer_dist
+        # self.bottom_layer_dist = self.substrate.bottom_layer_dist
+        # self.top_layer_dist = self.film.top_layer_dist
 
     def _get_average_inplane_lattice(self):
         film_lattice = self._film_supercell.lattice.matrix[:2]
@@ -1243,7 +183,7 @@ class Interface:
 
     @property
     def substrate_oriented_bulk_structure(self) -> Structure:
-        if type(self.substrate) == Surface:
+        if issubclass(type(self.substrate), BaseSurface):
             obs_structure = utils.apply_strain_matrix(
                 structure=self.substrate.oriented_bulk_structure,
                 strain_matrix=self._substrate_strain_matrix,
@@ -1254,7 +194,7 @@ class Interface:
 
     @property
     def film_oriented_bulk_structure(self) -> Structure:
-        if type(self.film) == Surface:
+        if issubclass(type(self.film), BaseSurface):
             obs_structure = utils.apply_strain_matrix(
                 structure=self.film.oriented_bulk_structure,
                 strain_matrix=self._film_strain_matrix,
@@ -1264,15 +204,15 @@ class Interface:
             raise "film_oriented_bulk_structure is not applicable when an Interface is used as the film"
 
     @property
-    def c_projection(self) -> float:
-        return self.substrate.c_projection
+    def layer_thickness(self) -> float:
+        return self.substrate.oriented_bulk.layer_thickness
 
     def _passivated(self) -> bool:
         return self.substrate._passivated or self.film._passivated
 
     @property
-    def _transformation_matrix(self) -> np.ndarray:
-        return self.substrate._transformation_matrix
+    def bulk_transformation_matrix(self) -> np.ndarray:
+        return self.substrate.bulk_transformation_matrix
 
     @property
     def surface_normal(self) -> np.ndarray:
@@ -2170,12 +1110,12 @@ class Interface:
         if substrate:
             matrix = self.match.substrate_sl_transform
 
-            if type(self.substrate) == Surface:
+            if issubclass(type(self.substrate), BaseSurface):
                 supercell = (
                     self.substrate._non_orthogonal_slab_structure.copy()
                 )
                 obs_supercell = self.substrate.oriented_bulk_structure.copy()
-            elif type(self.substrate) == Interface:
+            elif type(self.substrate) is Interface:
                 supercell = self.substrate._non_orthogonal_structure.copy()
                 obs_supercell = None
 
@@ -2193,14 +1133,14 @@ class Interface:
                     )
                     supercell.add_site_property(layer_key, layer_index)
 
-            basis = self.substrate.uvw_basis
+            basis = self.substrate.crystallographic_basis
         else:
             matrix = self.match.film_sl_transform
 
-            if type(self.film) == Surface:
+            if issubclass(type(self.film), BaseSurface):
                 supercell = self.film._non_orthogonal_slab_structure.copy()
                 obs_supercell = self.film.oriented_bulk_structure.copy()
-            elif type(self.film) == Interface:
+            elif type(self.film) is Interface:
                 supercell = self.film._non_orthogonal_structure.copy()
                 obs_supercell = None
 
@@ -2215,7 +1155,7 @@ class Interface:
                     layer_index[is_film] += layer_index[is_sub].max() + 1
                     supercell.add_site_property(layer_key, layer_index)
 
-            basis = self.film.uvw_basis
+            basis = self.film.crystallographic_basis
 
         supercell.make_supercell(scaling_matrix=matrix)
 
@@ -2232,23 +1172,14 @@ class Interface:
         return supercell, obs_supercell, uvw_supercell, scale_factors
 
     def _orient_supercell(
-        self, supercell: Structure, substrate: bool
+        self,
+        supercell: Structure,
+        substrate: bool,
     ) -> np.ndarray:
         if substrate:
             a_to_i = self.match.substrate_align_transform.T
         else:
             a_to_i = self.match.film_align_transform.T
-
-        # print(np.round(a_to_i, 3))
-
-        # matrix = deepcopy(supercell.lattice.matrix)
-
-        # a_norm = matrix[0] / np.linalg.norm(matrix[0])
-        # a_to_i = np.array(
-        #     [[a_norm[0], -a_norm[1], 0], [a_norm[1], a_norm[0], 0], [0, 0, 1]]
-        # ).T
-
-        # print(np.round(a_to_i, 3))
 
         a_to_i_operation = SymmOp.from_rotation_and_translation(
             a_to_i, translation_vec=np.zeros(3)
@@ -2377,7 +1308,7 @@ class Interface:
         # Get the normalized projection of the substrate c-vector onto the normal vector,
         # This is used to determine the length of the non-orthogonal c-vector in order to get
         # the correct vacuum size.
-        c_norm_proj = self.substrate.c_projection / oriented_bulk_c
+        c_norm_proj = self.substrate.layer_thickness / oriented_bulk_c
 
         # Get the substrate matrix and c-vector
         sub_matrix = strained_sub.lattice.matrix
@@ -2424,7 +1355,7 @@ class Interface:
 
         # Create the transformation matrix from the primtive bulk structure to the interface unit cell
         # this is only needed for band unfolding purposes
-        sub_M = self.substrate._transformation_matrix
+        sub_M = self.substrate.bulk_transformation_matrix
         layer_M = np.eye(3).astype(int)
         layer_M[-1, -1] = n_unit_cell
         interface_M = layer_M @ self.match.substrate_sl_transform @ sub_M

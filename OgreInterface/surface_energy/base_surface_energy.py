@@ -31,11 +31,11 @@ class BaseSurfaceEnergy:
         self.obs = oriented_bulk_structure
         matrix = self.obs.lattice.matrix
         self.area = np.linalg.norm(np.cross(matrix[0], matrix[1]))
-        self.slab = utils.get_layer_supercelll(
+        self.slab = utils.get_layer_supercell(
             structure=self.obs,
             layers=layers,
         )
-        self.iface = utils.get_layer_supercelll(
+        self.iface = utils.get_layer_supercell(
             structure=self.obs,
             layers=2 * layers,
         )

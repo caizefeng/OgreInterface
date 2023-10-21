@@ -1,5 +1,5 @@
 from itertools import product
-from typing import Union, Optional
+from typing import Union, Optional, List
 
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -13,6 +13,7 @@ from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
 from OgreInterface.generate import SurfaceGenerator
+from OgreInterface.surfaces import OrientedBulk
 from OgreInterface.lattice_match import ZurMcGill
 from OgreInterface import utils
 
@@ -68,208 +69,66 @@ class MillerSearch(object):
         max_area: Optional[float] = None,
         refine_structure: bool = True,
         suppress_warnings: bool = False,
+        custom_film_miller_indices: Optional[List[List[int]]] = None,
+        custom_substrate_miller_indices: Optional[List[List[int]]] = None,
     ) -> None:
         self.refine_structure = refine_structure
         self._suppress_warnings = suppress_warnings
 
         if type(substrate) is str:
-            self.substrate, _ = self._get_bulk(Structure.from_file(substrate))
+            self.substrate = utils.load_bulk(
+                atoms_or_structure=Structure.from_file(substrate),
+                refine_structure=self.refine_structure,
+                suppress_warnings=self._suppress_warnings,
+            )
+            # self.substrate, _ = self._get_bulk(Structure.from_file(substrate))
         else:
-            self.substrate, _ = self._get_bulk(substrate)
+            self.substrate = utils.load_bulk(
+                atoms_or_structure=substrate,
+                refine_structure=self.refine_structure,
+                suppress_warnings=self._suppress_warnings,
+            )
+            # self.substrate, _ = self._get_bulk(substrate)
 
         if type(film) is str:
-            self.film, _ = self._get_bulk(Structure.from_file(film))
+            self.film = utils.load_bulk(
+                atoms_or_structure=Structure.from_file(film),
+                refine_structure=self.refine_structure,
+                suppress_warnings=self._suppress_warnings,
+            )
+            # self.film, _ = self._get_bulk(Structure.from_file(film))
         else:
-            self.film, _ = self._get_bulk(film)
+            self.film = utils.load_bulk(
+                atoms_or_structure=film,
+                refine_structure=self.refine_structure,
+                suppress_warnings=self._suppress_warnings,
+            )
+            # self.film, _ = self._get_bulk(film)
 
         self.max_film_index = max_film_index
         self.max_substrate_index = max_substrate_index
         self.max_area_mismatch = max_area_mismatch
         self.max_strain = max_strain
         self.max_area = max_area
-        self.substrate_inds = self._get_unique_miller_indices(
-            self.substrate, self.max_substrate_index
-        )
 
-        self.film_inds = self._get_unique_miller_indices(
-            self.film, self.max_film_index
-        )
+        if custom_substrate_miller_indices is not None:
+            self.substrate_inds = custom_substrate_miller_indices
+        else:
+            self.substrate_inds = utils.get_unique_miller_indices(
+                self.substrate,
+                self.max_substrate_index,
+            )
+
+        if custom_film_miller_indices is not None:
+            self.film_inds = custom_film_miller_indices
+        else:
+            self.film_inds = utils.get_unique_miller_indices(
+                self.film,
+                self.max_film_index,
+            )
 
         self._misfit_data = None
         self._area_data = None
-
-    def _get_bulk(self, atoms_or_struc):
-        if type(atoms_or_struc) is Atoms:
-            init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
-        elif type(atoms_or_struc) is Structure:
-            init_structure = atoms_or_struc
-        else:
-            raise TypeError(
-                f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
-            )
-
-        if self.refine_structure:
-            conventional_structure = utils.spglib_standardize(
-                init_structure,
-                to_primitive=False,
-                no_idealize=False,
-            )
-
-            init_angles = init_structure.lattice.angles
-            init_lengths = init_structure.lattice.lengths
-            init_length_and_angles = np.concatenate(
-                [list(init_lengths), list(init_angles)]
-            )
-
-            conv_angles = conventional_structure.lattice.angles
-            conv_lengths = conventional_structure.lattice.lengths
-            conv_length_and_angles = np.concatenate(
-                [list(conv_lengths), list(conv_angles)]
-            )
-
-            if not np.isclose(
-                conv_length_and_angles - init_length_and_angles, 0
-            ).all():
-                if not self._suppress_warnings:
-                    labels = ["a", "b", "c", "alpha", "beta", "gamma"]
-                    init_cell_str = ", ".join(
-                        [
-                            f"{label} = {val:.3f}"
-                            for label, val in zip(
-                                labels, init_length_and_angles
-                            )
-                        ]
-                    )
-                    conv_cell_str = ", ".join(
-                        [
-                            f"{label} = {val:.3f}"
-                            for label, val in zip(
-                                labels, conv_length_and_angles
-                            )
-                        ]
-                    )
-                    warning_str = "\n".join(
-                        [
-                            "----------------------------------------------------------",
-                            "WARNING: The refined cell is different from the input cell",
-                            f"Initial: {init_cell_str}",
-                            f"Refined: {conv_cell_str}",
-                            "Make sure the input miller index is for the refined structure, otherwise set refine_structure=False",
-                            "To turn off this warning set suppress_warnings=True",
-                            "----------------------------------------------------------",
-                            "",
-                        ]
-                    )
-                    print(warning_str)
-
-            conventional_atoms = AseAtomsAdaptor.get_atoms(
-                conventional_structure
-            )
-
-            return (
-                conventional_structure,
-                conventional_atoms,
-            )
-        else:
-            init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
-
-            return init_structure, init_atoms
-
-    def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
-        t = min(abs(a), abs(b))
-        while abs(b) > rtol * t + atol:
-            a, b = b, a % b
-        return a
-
-    def _hex_to_cubic(self, uvtw):
-        u = 2 * uvtw[0] + uvtw[1]
-        v = 2 * uvtw[1] + uvtw[0]
-        w = uvtw[-1]
-
-        output = np.array([u, v, w])
-        output = utils._get_reduced_vector(output)
-
-        return output.astype(int)
-
-    def _cubic_to_hex(self, uvw):
-        u = (1 / 3) * ((2 * uvw[0]) - uvw[1])
-        v = (1 / 3) * ((2 * uvw[1]) - uvw[0])
-        t = -(u + v)
-        w = uvw[-1]
-
-        output = np.array([u, v, t, w])
-        output = utils._get_reduced_vector(output)
-
-        return output.astype(int)
-
-    def _get_unique_miller_indices(self, struc: Structure, max_index: int):
-        struc_sg = SpacegroupAnalyzer(struc)
-        lattice = struc.lattice
-        recip = struc.lattice.reciprocal_lattice_crystallographic
-        symmops = struc_sg.get_point_group_operations(cartesian=False)
-        planes = set(list(product(range(-max_index, max_index + 1), repeat=3)))
-        planes.remove((0, 0, 0))
-
-        reduced_planes = []
-        for plane in planes:
-            reduced_plane = utils._get_reduced_vector(
-                np.array(plane).astype(float)
-            )
-            reduced_plane = reduced_plane.astype(int)
-            reduced_planes.append(tuple(reduced_plane))
-
-        reduced_planes = set(reduced_planes)
-
-        planes_dict = {p: [] for p in reduced_planes}
-
-        for plane in reduced_planes:
-            frac_vec = np.array(plane).dot(recip.metric_tensor)
-            if plane in planes_dict.keys():
-                for i, symmop in enumerate(symmops):
-                    frac_point_out = symmop.apply_rotation_only(frac_vec)
-                    point_out = frac_point_out.dot(lattice.metric_tensor)
-                    point_out = utils._get_reduced_vector(np.round(point_out))
-                    point_out = tuple(point_out.astype(int))
-                    planes_dict[plane].append(point_out)
-                    if point_out != plane:
-                        if point_out in planes_dict.keys():
-                            del planes_dict[point_out]
-
-        unique_planes = []
-
-        for k in planes_dict:
-            equivalent_planes = np.array(list(set(planes_dict[k])))
-            diff = np.abs(np.sum(np.sign(equivalent_planes), axis=1))
-            like_signs = equivalent_planes[diff == np.max(diff)]
-            if len(like_signs) == 1:
-                unique_planes.append(like_signs[0])
-            else:
-                first_max = like_signs[
-                    np.abs(like_signs)[:, 0]
-                    == np.max(np.abs(like_signs)[:, 0])
-                ]
-                if len(first_max) == 1:
-                    unique_planes.append(first_max[0])
-                else:
-                    second_max = first_max[
-                        np.abs(first_max)[:, 1]
-                        == np.max(np.abs(first_max)[:, 1])
-                    ]
-                    if len(second_max) == 1:
-                        unique_planes.append(second_max[0])
-                    else:
-                        unique_planes.append(
-                            second_max[
-                                np.argmax(np.sign(second_max).sum(axis=1))
-                            ]
-                        )
-
-        unique_planes = np.vstack(unique_planes)
-        sorted_planes = sorted(
-            unique_planes, key=lambda x: (np.linalg.norm(x), -np.sign(x).sum())
-        )
-
-        return np.vstack(sorted_planes)
 
     def run_scan(self) -> None:
         """
@@ -280,39 +139,28 @@ class MillerSearch(object):
         films = []
 
         for inds in self.substrate_inds:
-            sg_sub = SurfaceGenerator(
+            sub_obs = OrientedBulk(
                 bulk=self.substrate,
                 miller_index=inds,
-                layers=5,
-                vacuum=10,
-                generate_all=False,
-                lazy=True,
-                refine_structure=self.refine_structure,
+                make_planar=True,
             )
-            sub_inplane_vectors = sg_sub.inplane_vectors
-            sub_area = np.linalg.norm(
-                np.cross(sub_inplane_vectors[0], sub_inplane_vectors[1])
-            )
-            substrates.append(
-                [sub_inplane_vectors, sub_area, sg_sub.uvw_basis]
-            )
+            sub_inplane_vectors = sub_obs.inplane_vectors
+            sub_area = sub_obs.area
+            sub_basis = sub_obs.crystallographic_basis
+
+            substrates.append([sub_inplane_vectors, sub_area, sub_basis])
 
         for inds in self.film_inds:
-            sg_film = SurfaceGenerator(
+            film_obs = OrientedBulk(
                 bulk=self.film,
                 miller_index=inds,
-                layers=5,
-                vacuum=10,
-                generate_all=False,
-                lazy=True,
-                refine_structure=self.refine_structure,
+                make_planar=True,
             )
-            film_inplane_vectors = sg_film.inplane_vectors
-            film_area = np.linalg.norm(
-                np.cross(film_inplane_vectors[0], film_inplane_vectors[1])
-            )
+            film_inplane_vectors = film_obs.inplane_vectors
+            film_area = film_obs.area
+            film_basis = film_obs.crystallographic_basis
 
-            films.append([film_inplane_vectors, film_area, sg_film.uvw_basis])
+            films.append([film_inplane_vectors, film_area, film_basis])
 
         misfits = np.ones((len(substrates), len(films))) * np.nan
         areas = np.ones((len(substrates), len(films))) * np.nan

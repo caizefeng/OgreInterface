@@ -5,7 +5,7 @@ import itertools
 import functools
 import math
 import collections
-from typing import List
+from typing import List, Tuple, Union, Optional
 
 from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
@@ -14,9 +14,295 @@ from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.core.periodic_table import DummySpecies
 from pymatgen.analysis.graphs import StructureGraph
 from pymatgen.analysis.local_env import JmolNN
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.spatial.distance import squareform
+from ase import Atoms
 import numpy as np
 import networkx as nx
 import spglib
+
+
+def load_bulk(
+    atoms_or_structure: Union[Atoms, Structure],
+    refine_structure: bool = True,
+    suppress_warnings: bool = False,
+) -> Structure:
+    if type(atoms_or_structure) is Atoms:
+        init_structure = AseAtomsAdaptor.get_structure(atoms_or_structure)
+    elif type(atoms_or_structure) is Structure:
+        init_structure = atoms_or_structure
+    else:
+        raise TypeError(
+            f"load_bulk accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_structure).__name__}'"
+        )
+
+    if refine_structure:
+        conventional_structure = spglib_standardize(
+            init_structure,
+            to_primitive=False,
+            no_idealize=False,
+        )
+
+        init_angles = init_structure.lattice.angles
+        init_lengths = init_structure.lattice.lengths
+        init_length_and_angles = np.concatenate(
+            [list(init_lengths), list(init_angles)]
+        )
+
+        conv_angles = conventional_structure.lattice.angles
+        conv_lengths = conventional_structure.lattice.lengths
+        conv_length_and_angles = np.concatenate(
+            [list(conv_lengths), list(conv_angles)]
+        )
+
+        if not np.isclose(
+            conv_length_and_angles - init_length_and_angles, 0
+        ).all():
+            if not suppress_warnings:
+                labels = ["a", "b", "c", "alpha", "beta", "gamma"]
+                init_cell_str = ", ".join(
+                    [
+                        f"{label} = {val:.3f}"
+                        for label, val in zip(labels, init_length_and_angles)
+                    ]
+                )
+                conv_cell_str = ", ".join(
+                    [
+                        f"{label} = {val:.3f}"
+                        for label, val in zip(labels, conv_length_and_angles)
+                    ]
+                )
+                warning_str = "\n".join(
+                    [
+                        "----------------------------------------------------------",
+                        "WARNING: The refined cell is different from the input cell",
+                        f"Initial: {init_cell_str}",
+                        f"Refined: {conv_cell_str}",
+                        "Make sure the input miller index is for the refined structure, otherwise set refine_structure=False",
+                        "To turn off this warning set suppress_warnings=True",
+                        "----------------------------------------------------------",
+                        "",
+                    ]
+                )
+                print(warning_str)
+
+        return conventional_structure
+    else:
+        return init_structure
+
+
+def get_rounded_structure(structure: Structure, tol: int = 6):
+    new_matrix = copy.deepcopy(structure.lattice.matrix)
+    rounded_matrix = np.round(new_matrix, tol)
+    rounded_structure = Structure(
+        lattice=Lattice(matrix=rounded_matrix),
+        species=structure.species,
+        coords=np.mod(np.round(structure.frac_coords, tol), 1.0),
+        to_unit_cell=True,
+        coords_are_cartesian=False,
+        site_properties=structure.site_properties,
+    )
+
+    return rounded_structure
+
+
+def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
+    t = min(abs(a), abs(b))
+    while abs(b) > rtol * t + atol:
+        a, b = b, a % b
+    return a
+
+
+def hex_to_cubic_direction(uvtw) -> np.ndarray:
+    u = 2 * uvtw[0] + uvtw[1]
+    v = 2 * uvtw[1] + uvtw[0]
+    w = uvtw[-1]
+
+    output = np.array([u, v, w])
+    output = _get_reduced_vector(output)
+
+    return output.astype(int)
+
+
+def cubic_to_hex_direction(uvw) -> np.ndarray:
+    u = (1 / 3) * ((2 * uvw[0]) - uvw[1])
+    v = (1 / 3) * ((2 * uvw[1]) - uvw[0])
+    t = -(u + v)
+    w = uvw[-1]
+
+    output = np.array([u, v, t, w])
+    output = _get_reduced_vector(output)
+
+    return output.astype(int)
+
+
+def hex_to_cubic_plane(hkil) -> np.ndarray:
+    h, k, i, l = hkil
+
+    return np.array([h, k, l]).astype(int)
+
+
+def cubic_to_hex_plane(hkl) -> np.ndarray:
+    h, k, l = hkl
+
+    return np.array([h, k, -(h + k), l]).astype(int)
+
+
+def get_unique_miller_indices(
+    structure: Structure,
+    max_index: int,
+) -> np.ndarray:
+    # Get the spacegroup of the input structure
+    struc_sg = SpacegroupAnalyzer(structure)
+
+    # Get the lattice object
+    lattice = structure.lattice
+
+    # Determine if it is hexagonal
+    is_hexagonal = lattice.is_hexagonal
+
+    # Get the reciprocal lattice
+    recip = structure.lattice.reciprocal_lattice_crystallographic
+
+    # Get all the point group operations of the structure
+    symmops = struc_sg.get_point_group_operations(cartesian=False)
+
+    # Get the list of all possible planes up to some max miller index
+    planes = set(
+        list(itertools.product(range(-max_index, max_index + 1), repeat=3))
+    )
+    planes.remove((0, 0, 0))
+
+    # Get the reduced planes (i.e. (2, 2, 2) -> (1, 1, 1))
+    reduced_planes = []
+    for plane in planes:
+        reduced_plane = _get_reduced_vector(np.array(plane).astype(float))
+        reduced_plane = reduced_plane.astype(int)
+        reduced_planes.append(tuple(reduced_plane))
+
+    # Make a set to get the unique planes
+    reduced_planes = set(reduced_planes)
+
+    # If the structure is hexagonal the convert from (hkl) to (hkil) and remove
+    # and surfaces with any |i| > max_index
+    if is_hexagonal:
+        hexagonal_planes = []
+        for plane in reduced_planes:
+            hexagonal_plane = cubic_to_hex_plane(hkl=plane)
+
+            if (np.abs(hexagonal_plane) <= max_index).all():
+                hexagonal_planes.append(tuple(hexagonal_plane))
+
+        reduced_planes = set(hexagonal_planes)
+
+    # Initialize a dictionary of all the unique planes
+    planes_dict = {p: [] for p in reduced_planes}
+
+    # Loop through all planes
+    for plane in reduced_planes:
+        # If the plane hasnt been found then apply all point group
+        # operations to the surface normal of that plane to get all
+        # symmetrically equivalent surfaces
+        if plane in planes_dict:
+            # If it is hexagonal go from (hkil) -> (hkl) when applying
+            # point group operations
+            if is_hexagonal:
+                op_plane = tuple(hex_to_cubic_plane(hkil=plane))
+            else:
+                op_plane = copy.deepcopy(plane)
+
+            # Get the real space plane normal in fractional coordinates
+            # by multiplying by the reciprocal metric tensor
+            frac_normal = np.array(op_plane).dot(recip.metric_tensor)
+
+            # Loop through all point group operations
+            for i, symmop in enumerate(symmops):
+                # Apply the symmop to the surface normal in fractional coords
+                frac_normal_op = symmop.apply_rotation_only(frac_normal)
+
+                # Multiply by the realspace metric tensor to get the reciprocal
+                # direction in fractional coordinates (i.e. the new (hkl))
+                equiv_plane = _get_reduced_vector(
+                    frac_normal_op.dot(lattice.metric_tensor)
+                ).astype(int)
+
+                # If the structure has a hexagonal lattice then convert (hkl)
+                # back to (hkil)
+                if is_hexagonal:
+                    equiv_plane = cubic_to_hex_plane(hkl=equiv_plane)
+
+                equiv_plane = tuple(equiv_plane)
+
+                # Append the equivalent plane to the dictionary
+                planes_dict[plane].append(equiv_plane)
+
+                # If the equivalent plane is not equal to the initial plane
+                # and the equivalent plane is still in the planes_dict keys
+                # the remove it from the keys because we already know it is
+                # an equivalent plane
+                if equiv_plane != plane:
+                    if equiv_plane in planes_dict.keys():
+                        del planes_dict[equiv_plane]
+
+    # Next we go through all equivalent plane and get the preferred surface
+    # i.e. if (110), (1-10), (-1-10), (10-1) are all equivalent then we would
+    # prefer to return (110) becuase it looks better
+    unique_planes = []
+    for k in planes_dict:
+        # Get an array of all the equivalent planes
+        equivalent_planes = np.array(list(set(planes_dict[k])))
+
+        # Get the difference in signs for all planes ideally we would like
+        # to have the surface with (hkl) that has (hkl) with all the same
+        # signs
+        diff = np.abs(np.sum(np.sign(equivalent_planes), axis=1))
+
+        # Filter out the surfaces with the most similar signs
+        like_signs = equivalent_planes[diff == np.max(diff)]
+
+        # If there is only one surface with similar signs then select it
+        if len(like_signs) == 1:
+            unique_planes.append(like_signs[0])
+        else:
+            # If there is more than one surface with similar signs then we
+            # want the surface with the first index as the largest number
+            # i.e. between (012), (102), (201), & (210) we want (210) or (201)
+            first_max = like_signs[
+                np.abs(like_signs)[:, 0] == np.max(np.abs(like_signs)[:, 0])
+            ]
+
+            # If there is only one option after that then we select it
+            if len(first_max) == 1:
+                unique_planes.append(first_max[0])
+            else:
+                # If there is more than one surface with the first entry as
+                # the max then we want the one with largest second entry
+                # i.e. between (012), (102), (201), & (210) we want (210)
+                second_max = first_max[
+                    np.abs(first_max)[:, 1] == np.max(np.abs(first_max)[:, 1])
+                ]
+
+                # If there is only one option at that point then we select it
+                if len(second_max) == 1:
+                    unique_planes.append(second_max[0])
+                else:
+                    # If there is more than one option at this point then pick
+                    # the one with the largest with the largest positive values
+                    # i.e. between (-210) and (2-10) we want (2-10)
+                    unique_planes.append(
+                        second_max[np.argmax(np.sign(second_max).sum(axis=1))]
+                    )
+
+    # Stack all of the unique planes into an array
+    unique_planes = np.vstack(unique_planes)
+
+    # Sort the planes by the shortest norm and most positive elements
+    sorted_planes = sorted(
+        unique_planes, key=lambda x: (np.linalg.norm(x), -np.sign(x).sum())
+    )
+
+    return np.vstack(sorted_planes)
 
 
 def get_miller_index_label(miller_index: List[int]):
@@ -324,7 +610,7 @@ def get_atoms(struc):
     return AseAtomsAdaptor().get_atoms(struc)
 
 
-def get_layer_supercelll(
+def get_layer_supercell(
     structure: Structure, layers: int, vacuum_scale: int = 0
 ) -> Structure:
     base_frac_coords = structure.frac_coords
@@ -359,6 +645,83 @@ def get_layer_supercelll(
     )
 
     return layer_slab
+
+
+def calculate_possible_shifts(
+    structure: Structure,
+    tol: Optional[float] = None,
+):
+    frac_coords = structure.frac_coords[:, -1]
+
+    # Projection of c lattice vector in
+    # direction of surface normal.
+    h = structure.lattice.matrix[-1, -1]
+
+    if tol is None:
+        cart_coords = structure.cart_coords[:, -1]
+        extended_cart_coords = np.round(
+            np.concatenate(
+                [
+                    cart_coords - h,
+                    cart_coords,
+                    cart_coords + h,
+                ]
+            ),
+            5,
+        )
+        unique_cart_coords = np.sort(np.unique(extended_cart_coords))
+        diffs = np.diff(unique_cart_coords)
+        max_diff = diffs.max()
+        tol = 0.15 * max_diff
+
+        print(f"{tol = }")
+
+    n = len(frac_coords)
+
+    if n == 1:
+        # Clustering does not work when there is only one data point.
+        shift = frac_coords[0] + 0.5
+        return [shift - math.floor(shift)]
+
+    # We cluster the sites according to the c coordinates. But we need to
+    # take into account PBC. Let's compute a fractional c-coordinate
+    # distance matrix that accounts for PBC.
+    dist_matrix = np.zeros((n, n))
+
+    for i, j in itertools.combinations(list(range(n)), 2):
+        if i != j:
+            cdist = frac_coords[i] - frac_coords[j]
+            cdist = abs(cdist - round(cdist)) * h
+            dist_matrix[i, j] = cdist
+            dist_matrix[j, i] = cdist
+
+    condensed_m = squareform(dist_matrix)
+    z = linkage(condensed_m)
+    clusters = fcluster(z, tol, criterion="distance")
+
+    # Generate dict of cluster# to c val - doesn't matter what the c is.
+    c_loc = {c: frac_coords[i] for i, c in enumerate(clusters)}
+
+    # Put all c into the unit cell.
+    possible_c = [c - math.floor(c) for c in sorted(c_loc.values())]
+
+    # Calculate the shifts
+    nshifts = len(possible_c)
+    shifts = []
+    for i in range(nshifts):
+        if i == nshifts - 1:
+            # There is an additional shift between the first and last c
+            # coordinate. But this needs special handling because of PBC.
+            shift = (possible_c[0] + 1 + possible_c[i]) * 0.5
+            if shift > 1:
+                shift -= 1
+        else:
+            shift = (possible_c[i] + possible_c[i + 1]) * 0.5
+        shifts.append(shift - math.floor(shift))
+
+    shifts = sorted(shifts)
+
+    return shifts
 
 
 def group_layers(structure, atol=None):
@@ -426,7 +789,7 @@ def get_reduced_basis(basis: np.ndarray) -> np.ndarray:
     for i, b in enumerate(basis):
         basis[i] = _get_reduced_vector(b)
 
-    return basis
+    return np.round(basis).astype(int)
 
 
 def _get_reduced_vector(vector: np.ndarry) -> np.ndarray:
@@ -445,7 +808,11 @@ def _float_gcd(a, b, rtol=1e-05, atol=1e-08):
     return a
 
 
-def reduce_vectors_zur_and_mcgill(a, b):
+def reduce_vectors_zur_and_mcgill(
+    a: np.ndarray,
+    b: np.ndarray,
+    surface_normal: np.ndarray = np.array([0, 0, 1]),
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     vecs = np.vstack([a, b])
     mat = np.eye(3)
     reduced = False
@@ -487,6 +854,7 @@ def reduce_vectors_zur_and_mcgill(a, b):
 
     basis = np.eye(3)
     basis[:2] = vecs
+    basis[-1] = surface_normal
     det = np.linalg.det(basis)
     lefty = det < 0
 
@@ -494,228 +862,8 @@ def reduce_vectors_zur_and_mcgill(a, b):
         vecs[1] *= -1
         mat[1] *= -1
 
-    if not dot_0 and np.isclose(a_norm, b_norm) and lefty:
+    if not dot_0 and lefty:
         vecs = vecs[[1, 0]]
         mat = mat[[1, 0, 2]]
 
     return vecs[0], vecs[1], mat
-
-
-def get_primitive_structure(
-    struc,
-    tolerance: float = 0.25,
-    use_site_props: bool = False,
-    constrain_latt: list | dict | None = None,
-):
-    """
-    This finds a smaller unit cell than the input. Sometimes it doesn"t
-    find the smallest possible one, so this method is recursively called
-    until it is unable to find a smaller cell.
-
-    NOTE: if the tolerance is greater than 1/2 the minimum inter-site
-    distance in the primitive cell, the algorithm will reject this lattice.
-
-    Args:
-        tolerance (float), Angstroms: Tolerance for each coordinate of a
-            particular site. For example, [0.1, 0, 0.1] in cartesian
-            coordinates will be considered to be on the same coordinates
-            as [0, 0, 0] for a tolerance of 0.25. Defaults to 0.25.
-        use_site_props (bool): Whether to account for site properties in
-            differentiating sites.
-        constrain_latt (list/dict): List of lattice parameters we want to
-            preserve, e.g. ["alpha", "c"] or dict with the lattice
-            parameter names as keys and values we want the parameters to
-            be e.g. {"alpha": 90, "c": 2.5}.
-
-    Returns:
-        The most primitive structure found.
-    """
-    if constrain_latt is None:
-        constrain_latt = []
-
-    def site_label(site):
-        if not use_site_props:
-            return site.species_string
-        d = [site.species_string]
-        for k in sorted(site.properties.keys()):
-            d.append(k + "=" + str(site.properties[k]))
-        return ", ".join(d)
-
-    # group sites by species string
-    sites = sorted(struc._sites, key=site_label)
-
-    grouped_sites = [
-        list(a[1]) for a in itertools.groupby(sites, key=site_label)
-    ]
-    grouped_fcoords = [
-        np.array([s.frac_coords for s in g]) for g in grouped_sites
-    ]
-
-    # min_vecs are approximate periodicities of the cell. The exact
-    # periodicities from the supercell matrices are checked against these
-    # first
-    min_fcoords = min(grouped_fcoords, key=lambda x: len(x))
-    min_vecs = min_fcoords - min_fcoords[0]
-
-    # fractional tolerance in the supercell
-    super_ftol = np.divide(tolerance, struc.lattice.abc)
-    super_ftol_2 = super_ftol * 2
-
-    def pbc_coord_intersection(fc1, fc2, tol):
-        """
-        Returns the fractional coords in fc1 that have coordinates
-        within tolerance to some coordinate in fc2
-        """
-        d = fc1[:, None, :] - fc2[None, :, :]
-        d -= np.round(d)
-        np.abs(d, d)
-        return fc1[np.any(np.all(d < tol, axis=-1), axis=-1)]
-
-    # here we reduce the number of min_vecs by enforcing that every
-    # vector in min_vecs approximately maps each site onto a similar site.
-    # The subsequent processing is O(fu^3 * min_vecs) = O(n^4) if we do no
-    # reduction.
-    # This reduction is O(n^3) so usually is an improvement. Using double
-    # the tolerance because both vectors are approximate
-    for g in sorted(grouped_fcoords, key=lambda x: len(x)):
-        for f in g:
-            min_vecs = pbc_coord_intersection(min_vecs, g - f, super_ftol_2)
-
-    def get_hnf(fu):
-        """
-        Returns all possible distinct supercell matrices given a
-        number of formula units in the supercell. Batches the matrices
-        by the values in the diagonal (for less numpy overhead).
-        Computational complexity is O(n^3), and difficult to improve.
-        Might be able to do something smart with checking combinations of a
-        and b first, though unlikely to reduce to O(n^2).
-        """
-
-        def factors(n):
-            for i in range(1, n + 1):
-                if n % i == 0:
-                    yield i
-
-        for det in factors(fu):
-            if det == 1:
-                continue
-            for a in factors(det):
-                for e in factors(det // a):
-                    g = det // a // e
-                    yield det, np.array(
-                        [
-                            [[a, b, c], [0, e, f], [0, 0, g]]
-                            for b, c, f in itertools.product(
-                                range(a), range(a), range(e)
-                            )
-                        ]
-                    )
-
-    # we can't let sites match to their neighbors in the supercell
-    grouped_non_nbrs = []
-    for gfcoords in grouped_fcoords:
-        fdist = gfcoords[None, :, :] - gfcoords[:, None, :]
-        fdist -= np.round(fdist)
-        np.abs(fdist, fdist)
-        non_nbrs = np.any(fdist > 2 * super_ftol[None, None, :], axis=-1)
-        # since we want sites to match to themselves
-        np.fill_diagonal(non_nbrs, True)
-        grouped_non_nbrs.append(non_nbrs)
-
-    num_fu = functools.reduce(math.gcd, map(len, grouped_sites))
-    for size, ms in get_hnf(num_fu):
-        inv_ms = np.linalg.inv(ms)
-
-        # find sets of lattice vectors that are are present in min_vecs
-        dist = inv_ms[:, :, None, :] - min_vecs[None, None, :, :]
-        dist -= np.round(dist)
-        np.abs(dist, dist)
-        is_close = np.all(dist < super_ftol, axis=-1)
-        any_close = np.any(is_close, axis=-1)
-        inds = np.all(any_close, axis=-1)
-
-        for inv_m, m in zip(inv_ms[inds], ms[inds]):
-            new_m = np.dot(inv_m, struc.lattice.matrix)
-            ftol = np.divide(tolerance, np.sqrt(np.sum(new_m**2, axis=1)))
-
-            valid = True
-            new_coords = []
-            new_sp = []
-            new_props = collections.defaultdict(list)
-            for gsites, gfcoords, non_nbrs in zip(
-                grouped_sites, grouped_fcoords, grouped_non_nbrs
-            ):
-                all_frac = np.dot(gfcoords, m)
-
-                # calculate grouping of equivalent sites, represented by
-                # adjacency matrix
-                fdist = all_frac[None, :, :] - all_frac[:, None, :]
-                fdist = np.abs(fdist - np.round(fdist))
-                close_in_prim = np.all(fdist < ftol[None, None, :], axis=-1)
-                groups = np.logical_and(close_in_prim, non_nbrs)
-
-                # check that groups are correct
-                if not np.all(np.sum(groups, axis=0) == size):
-                    valid = False
-                    break
-
-                # check that groups are all cliques
-                for g in groups:
-                    if not np.all(groups[g][:, g]):
-                        valid = False
-                        break
-                if not valid:
-                    break
-
-                # add the new sites, averaging positions
-                added = np.zeros(len(gsites))
-                new_fcoords = all_frac % 1
-                for i, group in enumerate(groups):
-                    if not added[i]:
-                        added[group] = True
-                        inds = np.where(group)[0]
-                        coords = new_fcoords[inds[0]]
-                        for n, j in enumerate(inds[1:]):
-                            offset = new_fcoords[j] - coords
-                            coords += (offset - np.round(offset)) / (n + 2)
-                        new_sp.append(gsites[inds[0]].species)
-                        for k in gsites[inds[0]].properties:
-                            new_props[k].append(gsites[inds[0]].properties[k])
-                        new_coords.append(coords)
-
-            if valid:
-                inv_m = np.linalg.inv(m)
-                new_l = Lattice(np.dot(inv_m, struc.lattice.matrix))
-                s = Structure(
-                    new_l,
-                    new_sp,
-                    new_coords,
-                    site_properties=new_props,
-                    coords_are_cartesian=False,
-                )
-
-                p = get_primitive_structure(
-                    s,
-                    tolerance=tolerance,
-                    use_site_props=use_site_props,
-                    constrain_latt=constrain_latt,
-                )
-                if not constrain_latt:
-                    return p
-
-                # Only return primitive structures that
-                # satisfy the restriction condition
-                p_latt, s_latt = p.lattice, struc.lattice
-                if type(constrain_latt).__name__ == "list":
-                    if all(
-                        getattr(p_latt, pp) == getattr(s_latt, pp)
-                        for pp in constrain_latt
-                    ):
-                        return p
-                elif type(constrain_latt).__name__ == "dict":
-                    if all(
-                        getattr(p_latt, pp) == constrain_latt[pp] for pp in constrain_latt.keys()  # type: ignore
-                    ):
-                        return p
-
-    return struc.copy()

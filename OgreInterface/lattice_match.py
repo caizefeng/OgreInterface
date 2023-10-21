@@ -480,7 +480,10 @@ class ZurMcGill:
         return matrices
 
 
-def reduce_vectors_zur_and_mcgill(vectors: np.ndarray) -> Iterable[np.ndarray]:
+def reduce_vectors_zur_and_mcgill(
+    vectors: np.ndarray,
+    plane_normal: np.ndarray = np.array([0, 0, 1]),
+) -> Iterable[np.ndarray]:
     n_vectors = len(vectors)
     reduced = np.zeros(n_vectors).astype(bool)
     mats = np.repeat(
@@ -546,6 +549,8 @@ def reduce_vectors_zur_and_mcgill(vectors: np.ndarray) -> Iterable[np.ndarray]:
 
     basis = np.repeat(np.eye(3).reshape(1, 3, 3), vectors.shape[0], axis=0)
     basis[:, :2] = vectors
+    basis[:, -1] = plane_normal
+
     det = np.linalg.det(basis)
     lefty = det < 0
     neg_change = np.logical_and(dot_0, lefty)

@@ -35,6 +35,10 @@ SelfSurfaceGenerator = TypeVar(
     "SelfSurfaceGenerator", bound="SurfaceGenerator"
 )
 
+SelfOrientedBulkGenerator = TypeVar(
+    "SelfOrientedBulkGenerator", bound="OrientedBulkGenerator"
+)
+
 SelfMolecularSurfaceGenerator = TypeVar(
     "SelfMolecularSurfaceGenerator", bound="MolecularSurfaceGenerator"
 )
@@ -48,6 +52,282 @@ class TolarenceError(RuntimeError):
     """Class to handle errors when no interfaces are found for a given tolarence setting."""
 
     pass
+
+
+class OrientedBulkGenerator:
+    def __init__(
+        self,
+        bulk: Structure,
+        miller_index: List[int],
+    ) -> SelfOrientedBulkGenerator:
+        pass
+
+    def _get_oriented_bulk_structure(self):
+        # Bulk Structure
+        bulk = self.bulk_structure
+
+        # Primitive bulk structure (these could be the same)
+        prim_bulk = self.primitive_structure
+
+        # Bulk Lattice
+        lattice = bulk.lattice
+
+        # Primitive bulk lattice (these could be the same)
+        prim_lattice = prim_bulk.lattice
+
+        # Bulk reciprocal lattice
+        recip_lattice = lattice.reciprocal_lattice_crystallographic
+
+        # Miller index of the surface
+        miller_index = self.miller_index
+
+        # Inter-layer distance of the lattice plane
+        d_hkl = lattice.d_hkl(miller_index)
+
+        # Get the normal vector of the lattice plane using the metric tensor
+        # The metric tensor transforms from fractional recoprocal coords to fractional real space coords
+        normal_vector = lattice.get_cartesian_coords(
+            np.array(miller_index).dot(recip_lattice.metric_tensor)
+        )
+
+        # Get the normal vector of the surface in the basis of the primitive lattice
+        prim_normal_vector = prim_lattice.get_fractional_coords(normal_vector)
+
+        # Get convert this to fractional reciprocal coords using the metric tensor to get the primitive equivalent (hkl)
+        prim_miller_index = prim_normal_vector.dot(prim_lattice.metric_tensor)
+
+        # Get the reduced miller index (i.e. (2, 2, 2) --> (1, 1, 1))
+        prim_miller_index = utils._get_reduced_vector(
+            prim_miller_index
+        ).astype(int)
+
+        # Normalie the normal vector to length = 1.0
+        normal_vector /= np.linalg.norm(normal_vector)
+
+        # Calculate the unit cell intercepts using either the primitive bulk + primitive equivalent surface
+        # or the bulk + bulk surface
+        if not self._use_prim:
+            intercepts = np.array(
+                [1 / i if i != 0 else 0 for i in miller_index]
+            )
+            non_zero_points = np.where(intercepts != 0)[0]
+            lattice_for_slab = lattice
+            struc_for_slab = bulk
+        else:
+            intercepts = np.array(
+                [1 / i if i != 0 else 0 for i in prim_miller_index]
+            )
+            non_zero_points = np.where(intercepts != 0)[0]
+            d_hkl = lattice.d_hkl(miller_index)
+            lattice_for_slab = prim_lattice
+            struc_for_slab = prim_bulk
+
+        # Get the inplane lattice vectors of the surface
+        # If the is only one non-zero intercept then we know the whole basis (i.e. (h, 0, 0), (k, 0, 0), (l, 0, 0))
+        if len(non_zero_points) == 1:
+            basis = np.eye(3)
+            basis[non_zero_points[0], non_zero_points[0]] *= intercepts[
+                non_zero_points[0]
+            ]
+            dot_products = basis.dot(normal_vector)
+            sort_inds = np.argsort(dot_products)
+            basis = basis[sort_inds]
+
+            if np.linalg.det(basis) < 0:
+                basis = basis[[1, 0, 2]]
+
+        if len(non_zero_points) == 2:
+            points = intercepts * np.eye(3)
+            vec1 = points[non_zero_points[1]] - points[non_zero_points[0]]
+            vec2 = np.eye(3)[intercepts == 0]
+
+            basis = np.vstack([vec1, vec2])
+
+        if len(non_zero_points) == 3:
+            points = intercepts * np.eye(3)
+            possible_vecs = []
+            for center_inds in [[0, 1, 2], [1, 0, 2], [2, 0, 1]]:
+                vec1 = (
+                    points[non_zero_points[center_inds[1]]]
+                    - points[non_zero_points[center_inds[0]]]
+                )
+                vec2 = (
+                    points[non_zero_points[center_inds[2]]]
+                    - points[non_zero_points[center_inds[0]]]
+                )
+                cart_vec1 = lattice_for_slab.get_cartesian_coords(vec1)
+                cart_vec2 = lattice_for_slab.get_cartesian_coords(vec2)
+                angle = np.arccos(
+                    np.dot(cart_vec1, cart_vec2)
+                    / (np.linalg.norm(cart_vec1) * np.linalg.norm(cart_vec2))
+                )
+                possible_vecs.append((vec1, vec2, angle))
+
+            chosen_vec1, chosen_vec2, angle = min(
+                possible_vecs, key=lambda x: abs(x[-1])
+            )
+
+            basis = np.vstack([chosen_vec1, chosen_vec2])
+
+        basis = utils.get_reduced_basis(basis)
+
+        if len(basis) == 2:
+            max_normal_search = 2
+
+            index_range = sorted(
+                reversed(range(-max_normal_search, max_normal_search + 1)),
+                key=lambda x: abs(x),
+            )
+            candidates = []
+            for uvw in product(index_range, index_range, index_range):
+                if (not any(uvw)) or abs(
+                    np.linalg.det(np.vstack([basis, uvw]))
+                ) < 1e-8:
+                    continue
+
+                vec = lattice_for_slab.get_cartesian_coords(uvw)
+                proj = np.abs(np.dot(vec, normal_vector) - d_hkl)
+                vec_length = np.linalg.norm(vec)
+                cosine = np.dot(vec / vec_length, normal_vector)
+                candidates.append(
+                    (
+                        uvw,
+                        np.round(cosine, 5),
+                        np.round(vec_length, 5),
+                        np.round(proj, 5),
+                    )
+                )
+                if abs(abs(cosine) - 1) < 1e-8:
+                    # If cosine of 1 is found, no need to search further.
+                    break
+            # We want the indices with the maximum absolute cosine,
+            # but smallest possible length.
+
+            uvw, cosine, l, diff = max(
+                candidates,
+                key=lambda x: (-x[3], x[1], -x[2]),
+            )
+
+            basis = np.vstack([basis, uvw])
+
+        init_oriented_struc = struc_for_slab.copy()
+        init_oriented_struc.make_supercell(basis)
+
+        cart_basis = init_oriented_struc.lattice.matrix
+
+        if np.linalg.det(cart_basis) < 0:
+            ab_switch = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+            init_oriented_struc.make_supercell(ab_switch)
+            basis = ab_switch.dot(basis)
+            cart_basis = init_oriented_struc.lattice.matrix
+
+        cross_ab = np.cross(cart_basis[0], cart_basis[1])
+        cross_ab /= np.linalg.norm(cross_ab)
+        cross_ac = np.cross(cart_basis[0], cross_ab)
+        cross_ac /= np.linalg.norm(cross_ac)
+
+        ortho_basis = np.vstack(
+            [
+                cart_basis[0] / np.linalg.norm(cart_basis[0]),
+                cross_ac,
+                cross_ab,
+            ]
+        )
+
+        to_planar_operation = SymmOp.from_rotation_and_translation(
+            ortho_basis, translation_vec=np.zeros(3)
+        )
+
+        # if "molecules" in init_oriented_struc.site_properties:
+        #     for site in init_oriented_struc:
+        #         mol = site.properties["molecules"]
+        #         planar_mol = mol.copy()
+        #         planar_mol.translate_sites(range(len(mol)), site.coords)
+        #         planar_mol.apply_operation(to_planar_operation)
+        #         centered_mol = planar_mol.get_centered_molecule()
+        #         site.properties["molecules"] = centered_mol
+        # Poscar(init_oriented_struc).write_file("POSCAR_obs_001")
+
+        planar_oriented_struc = init_oriented_struc.copy()
+        planar_oriented_struc.apply_operation(to_planar_operation)
+
+        planar_matrix = deepcopy(planar_oriented_struc.lattice.matrix)
+
+        new_a, new_b, mat = utils.reduce_vectors_zur_and_mcgill(
+            planar_matrix[0],
+            planar_matrix[1],
+        )
+
+        planar_oriented_struc.make_supercell(mat)
+
+        a_norm = (
+            planar_oriented_struc.lattice.matrix[0]
+            / planar_oriented_struc.lattice.a
+        )
+        a_to_i = np.array(
+            [[a_norm[0], -a_norm[1], 0], [a_norm[1], a_norm[0], 0], [0, 0, 1]]
+        )
+
+        a_to_i_operation = SymmOp.from_rotation_and_translation(
+            a_to_i.T, translation_vec=np.zeros(3)
+        )
+
+        # if "molecules" in planar_oriented_struc.site_properties:
+        #     for site in planar_oriented_struc:
+        #         mol = site.properties["molecules"]
+        #         a_to_i_mol = mol.copy()
+        #         a_to_i_mol.translate_sites(range(len(mol)), site.coords)
+        #         a_to_i_mol.apply_operation(a_to_i_operation)
+        #         centered_mol = a_to_i_mol.get_centered_molecule()
+        #         site.properties["molecules"] = centered_mol
+
+        planar_oriented_struc.apply_operation(a_to_i_operation)
+
+        if "molecule_index" not in planar_oriented_struc.site_properties:
+            planar_oriented_struc.add_site_property(
+                "oriented_bulk_equivalent",
+                list(range(len(planar_oriented_struc))),
+            )
+
+        planar_oriented_struc.sort()
+
+        planar_oriented_atoms = AseAtomsAdaptor().get_atoms(
+            planar_oriented_struc
+        )
+
+        final_matrix = deepcopy(planar_oriented_struc.lattice.matrix)
+
+        final_basis = mat.dot(basis)
+        final_basis = utils.get_reduced_basis(final_basis).astype(int)
+
+        transformation_matrix = np.copy(final_basis)
+
+        if self._use_prim:
+            for i, b in enumerate(final_basis):
+                cart_coords = prim_lattice.get_cartesian_coords(b)
+                conv_frac_coords = lattice.get_fractional_coords(cart_coords)
+                conv_frac_coords = utils._get_reduced_vector(conv_frac_coords)
+                final_basis[i] = conv_frac_coords
+
+        inplane_vectors = final_matrix[:2]
+
+        norm = np.cross(final_matrix[0], final_matrix[1])
+        norm /= np.linalg.norm(norm)
+
+        if np.dot(norm, final_matrix[-1]) < 0:
+            norm *= -1
+
+        norm_proj = np.dot(norm, final_matrix[-1])
+
+        return (
+            planar_oriented_struc,
+            planar_oriented_atoms,
+            final_basis,
+            transformation_matrix,
+            inplane_vectors,
+            norm,
+            norm_proj,
+        )
 
 
 class SurfaceGenerator(Sequence):
@@ -131,13 +411,19 @@ class SurfaceGenerator(Sequence):
             self.primitive_atoms,
         ) = self._get_bulk(atoms_or_struc=bulk)
 
+        self._is_hexagonal = self.bulk_structure.lattice.is_hexagonal
+
         self._use_prim = len(self.bulk_structure) != len(
             self.primitive_structure
         )
 
         self._point_group_operations = self._get_point_group_operations()
 
-        self.miller_index = miller_index
+        if self._is_hexagonal and len(miller_index) == 4:
+            self.miller_index = utils.hex_to_cubic(miller_index)
+        else:
+            self.miller_index = miller_index
+
         self.vacuum = vacuum
         self.generate_all = generate_all
         self.lazy = lazy
@@ -424,31 +710,49 @@ class SurfaceGenerator(Sequence):
         struc.add_site_property("bulk_equivalent", equivalent_molecules)
 
     def _get_oriented_bulk_structure(self):
+        # Bulk Structure
         bulk = self.bulk_structure
+
+        # Primitive bulk structure (these could be the same)
         prim_bulk = self.primitive_structure
 
+        # Bulk Lattice
         lattice = bulk.lattice
+
+        # Primitive bulk lattice (these could be the same)
         prim_lattice = prim_bulk.lattice
 
+        # Bulk reciprocal lattice
         recip_lattice = lattice.reciprocal_lattice_crystallographic
 
+        # Miller index of the surface
         miller_index = self.miller_index
 
+        # Inter-layer distance of the lattice plane
         d_hkl = lattice.d_hkl(miller_index)
 
+        # Get the normal vector of the lattice plane using the metric tensor
+        # The metric tensor transforms from fractional recoprocal coords to fractional real space coords
         normal_vector = lattice.get_cartesian_coords(
             np.array(miller_index).dot(recip_lattice.metric_tensor)
         )
-        prim_normal_vector = prim_lattice.get_fractional_coords(normal_vector)
-        prim_miller_index = prim_normal_vector.dot(prim_lattice.metric_tensor)
-        prim_miller_index = prim_miller_index
 
+        # Get the normal vector of the surface in the basis of the primitive lattice
+        prim_normal_vector = prim_lattice.get_fractional_coords(normal_vector)
+
+        # Get convert this to fractional reciprocal coords using the metric tensor to get the primitive equivalent (hkl)
+        prim_miller_index = prim_normal_vector.dot(prim_lattice.metric_tensor)
+
+        # Get the reduced miller index (i.e. (2, 2, 2) --> (1, 1, 1))
         prim_miller_index = utils._get_reduced_vector(
             prim_miller_index
         ).astype(int)
 
+        # Normalie the normal vector to length = 1.0
         normal_vector /= np.linalg.norm(normal_vector)
 
+        # Calculate the unit cell intercepts using either the primitive bulk + primitive equivalent surface
+        # or the bulk + bulk surface
         if not self._use_prim:
             intercepts = np.array(
                 [1 / i if i != 0 else 0 for i in miller_index]
@@ -465,6 +769,8 @@ class SurfaceGenerator(Sequence):
             lattice_for_slab = prim_lattice
             struc_for_slab = prim_bulk
 
+        # Get the inplane lattice vectors of the surface
+        # If the is only one non-zero intercept then we know the whole basis (i.e. (h, 0, 0), (k, 0, 0), (l, 0, 0))
         if len(non_zero_points) == 1:
             basis = np.eye(3)
             basis[non_zero_points[0], non_zero_points[0]] *= intercepts[
@@ -476,8 +782,6 @@ class SurfaceGenerator(Sequence):
 
             if np.linalg.det(basis) < 0:
                 basis = basis[[1, 0, 2]]
-
-            basis = basis
 
         if len(non_zero_points) == 2:
             points = intercepts * np.eye(3)
@@ -931,7 +1235,7 @@ class SurfaceGenerator(Sequence):
         if vacuum_scale == 0:
             vacuum_scale = 1
 
-        non_orthogonal_slab = utils.get_layer_supercelll(
+        non_orthogonal_slab = utils.get_layer_supercell(
             structure=slab_base, layers=self.layers, vacuum_scale=vacuum_scale
         )
         non_orthogonal_slab.sort()
