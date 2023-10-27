@@ -160,7 +160,7 @@ def get_unique_miller_indices(
     lattice = structure.lattice
 
     # Determine if it is hexagonal
-    is_hexagonal = lattice.is_hexagonal
+    is_hexagonal = lattice.is_hexagonal()
 
     # Get the reciprocal lattice
     recip = structure.lattice.reciprocal_lattice_crystallographic

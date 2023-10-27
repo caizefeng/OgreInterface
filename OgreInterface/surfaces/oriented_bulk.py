@@ -25,7 +25,7 @@ class OrientedBulk(Sequence):
         make_planar: bool = True,
     ) -> SelfOrientedBulk:
         # Determine if the structure has a hexagonal lattice
-        self._is_hexagonal = bulk.lattice.is_hexagonal
+        self._is_hexagonal = bulk.lattice.is_hexagonal()
 
         # If the structure is hexagonal and the miller index
         # list has 4 elements then convert it back to cubic
