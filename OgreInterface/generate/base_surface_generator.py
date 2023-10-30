@@ -107,17 +107,19 @@ class BaseSurfaceGenerator(Sequence):
         generate_all: bool = True,
         lazy: bool = False,
         suppress_warnings: bool = False,
+        layer_grouping_tolarence: Optional[float] = None,
     ) -> None:
         super().__init__()
-        self.refine_structure = refine_structure
-        self.surface_type = surface_type
+        self._refine_structure = refine_structure
+        self._surface_type = surface_type
+        self._layer_grouping_tolarence = layer_grouping_tolarence
         self._suppress_warnings = suppress_warnings
         self._make_planar = make_planar
 
         self.bulk_structure = utils.load_bulk(
             atoms_or_structure=bulk,
-            refine_structure=refine_structure,
-            suppress_warnings=suppress_warnings,
+            refine_structure=self._refine_structure,
+            suppress_warnings=self._suppress_warnings,
         )
 
         self.miller_index = miller_index
@@ -240,7 +242,6 @@ class BaseSurfaceGenerator(Sequence):
         self,
         slab_base: OrientedBulk,
         shift: float = 0.0,
-        tol: Optional[float] = None,
     ) -> Tuple[Structure, Structure, float, Tuple[int, ...]]:
         """
         This method takes in shift value for the c lattice direction and
@@ -451,7 +452,7 @@ class BaseSurfaceGenerator(Sequence):
         # Return Surface objects
         for i in unique_inds:
             # Create the Surface object
-            surface = self.surface_type(
+            surface = self._surface_type(
                 slab=non_orthogonal_slabs[i],  # KEEP
                 oriented_bulk=shifted_slab_bases[i],  # KEEP
                 miller_index=self.miller_index,  # KEEP
@@ -466,7 +467,6 @@ class BaseSurfaceGenerator(Sequence):
     def _calculate_possible_shifts(
         self,
         structure: Structure,
-        tol: Optional[float] = None,
     ):
         """
         This function calculates the possible shifts that need to be applied to
@@ -487,7 +487,7 @@ class BaseSurfaceGenerator(Sequence):
         # direction of surface normal.
         h = self.obs.layer_thickness
 
-        if tol is None:
+        if self._layer_grouping_tolarence is None:
             cart_coords = structure.cart_coords
             projected_coords = np.dot(cart_coords, self.obs.surface_normal)
             extended_projected_coords = np.round(
@@ -503,7 +503,7 @@ class BaseSurfaceGenerator(Sequence):
             unique_cart_coords = np.sort(np.unique(extended_projected_coords))
             diffs = np.diff(unique_cart_coords)
             max_diff = diffs.max()
-            tol = 0.15 * max_diff
+            self._layer_grouping_tolarence = 0.15 * max_diff
 
         n = len(frac_coords)
 
@@ -526,9 +526,13 @@ class BaseSurfaceGenerator(Sequence):
 
         condensed_m = squareform(dist_matrix)
         z = linkage(condensed_m)
-        clusters = fcluster(z, tol, criterion="distance")
+        clusters = fcluster(
+            z,
+            self._layer_grouping_tolarence,
+            criterion="distance",
+        )
 
-        # Generate dict of cluster# to c val - doesn't matter what the c is.
+        # Generate dict of cluster to c val - doesn't matter what the c is.
         c_loc = {c: frac_coords[i] for i, c in enumerate(clusters)}
 
         # Put all c into the unit cell.

@@ -23,6 +23,75 @@ import networkx as nx
 import spglib
 
 
+def get_substrate_layer_indices(
+    interface: Structure,
+    layer_from_interface: int,
+    atomic_layers: bool = True,
+) -> np.ndarray:
+    """
+    This function is used to extract the atom-indicies of specific layers of the substrate part of the interface.
+
+    Examples:
+        >>> interface.get_substrate_layer_indices(layer_from_interface=0)
+        >>> [234 235 236 237 254 255 256 257]
+
+
+    Args:
+        layer_from_interface: The layer number of the substrate which you would like to get
+            atom-indices for. The layer number is reference from the interface, so layer_from_interface=0
+            would be the layer of the substrate that is at the interface.
+
+    Returns:
+        A numpy array of integer indices corresponding to the atom index of the interface structure
+    """
+    if atomic_layers:
+        layer_key = "atomic_layer_index"
+    else:
+        layer_key = "layer_index"
+
+    site_props = interface.site_properties
+    is_sub = np.array(site_props["is_sub"])
+    layer_index = np.array(site_props[layer_key])
+    sub_n_layers = layer_index[is_sub].max()
+    rel_layer_index = sub_n_layers - layer_index
+    is_layer = rel_layer_index == layer_from_interface
+
+    return np.where(np.logical_and(is_sub, is_layer))[0]
+
+
+def get_film_layer_indices(
+    interface: Structure,
+    layer_from_interface: int,
+    atomic_layers: bool = True,
+) -> np.ndarray:
+    """
+    This function is used to extract the atom-indicies of specific layers of the film part of the interface.
+
+    Examples:
+        >>> interface.get_substrate_layer_indices(layer_from_interface=0)
+        >>> [0 1 2 3 4 5 6 7 8 9 10 11 12]
+
+    Args:
+        layer_from_interface: The layer number of the film which you would like to get atom-indices for.
+        The layer number is reference from the interface, so layer_from_interface=0
+        would be the layer of the film that is at the interface.
+
+    Returns:
+        A numpy array of integer indices corresponding to the atom index of the interface structure
+    """
+    if atomic_layers:
+        layer_key = "atomic_layer_index"
+    else:
+        layer_key = "layer_index"
+
+    site_props = interface.site_properties
+    is_film = np.array(site_props["is_film"])
+    layer_index = np.array(site_props[layer_key])
+    is_layer = layer_index == layer_from_interface
+
+    return np.where(np.logical_and(is_film, is_layer))[0]
+
+
 def load_bulk(
     atoms_or_structure: Union[Atoms, Structure],
     refine_structure: bool = True,

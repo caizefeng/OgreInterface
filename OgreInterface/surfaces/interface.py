@@ -255,6 +255,16 @@ class Interface:
         """
         return self._M_matrix.astype(int)
 
+    @property
+    def interface_height(self):
+        """
+        This returns the z-height of the interface (average between the top film atom z and bottom substrate z)
+        """
+        sub_z_coords = self._orthogonal_substrate_structure.cart_coords[:, -1]
+        film_z_coords = self._orthogonal_film_structure.cart_coords[:, -1]
+
+        return (sub_z_coords.min() + film_z_coords.max()) / 2
+
     def get_interface(
         self,
         orthogonal: bool = True,
