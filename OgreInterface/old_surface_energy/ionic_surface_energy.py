@@ -1,6 +1,6 @@
 from typing import List, Dict, Tuple, Optional
 from itertools import groupby, combinations_with_replacement, product
-from os.path import join, dirname, split
+from os.path import join, dirname, split, abspath
 
 from pymatgen.core.periodic_table import Element
 from pymatgen.analysis.local_env import CrystalNN
@@ -11,14 +11,11 @@ from ase.data import chemical_symbols, covalent_radii
 import pandas as pd
 import numpy as np
 
-from OgreInterface.score_function import (
-    IonicShiftedForcePotential,
-    create_batch,
-)
-from OgreInterface.surfaces import Surface
+from OgreInterface import data
 from OgreInterface.surface_energy.base_surface_energy import BaseSurfaceEnergy
 
-DATA_PATH = join(split(dirname(__file__))[0], "data")
+
+DATA_PATH = dirname(abspath(data.__file__))
 
 
 class IonicSurfaceEnergy(BaseSurfaceEnergy):

@@ -637,7 +637,7 @@ def replace_molecules_with_atoms(s: Structure) -> Structure:
     return dummy_struc
 
 
-def add_molecules(struc):
+def add_molecules(struc: Structure) -> Structure:
     mol_coords = []
     mol_atom_nums = []
 
