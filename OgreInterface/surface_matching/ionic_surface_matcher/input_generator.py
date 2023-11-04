@@ -43,7 +43,6 @@ def create_batch(
 def generate_input_dict(
     structure: Structure,
     cutoff: float,
-    is_interface: bool,
 ) -> Dict:
     site_props = structure.site_properties
 
@@ -73,7 +72,6 @@ def generate_input_dict(
         "idx_i": idx_i,
         "idx_j": idx_j,
         "offsets": offsets,
-        "is_interface": is_interface,
     }
 
     if "is_film" in site_props:

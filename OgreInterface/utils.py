@@ -6,6 +6,7 @@ import functools
 import math
 import collections
 from typing import List, Tuple, Union, Optional
+import typing as tp
 
 from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
@@ -21,6 +22,25 @@ from ase import Atoms
 import numpy as np
 import networkx as nx
 import spglib
+
+
+def shift_film(
+    interface: Structure,
+    shift: tp.Iterable,
+    fractional: bool,
+) -> Structure:
+    shifted_interface_structure = interface.copy()
+    film_ind = np.where(
+        shifted_interface_structure.site_properties["is_film"]
+    )[0]
+    shifted_interface_structure.translate_sites(
+        indices=film_ind,
+        vector=shift,
+        frac_coords=fractional,
+        to_unit_cell=True,
+    )
+
+    return shifted_interface_structure
 
 
 def get_substrate_layer_indices(

@@ -1,0 +1,2 @@
+from OgreInterface.interfaces.base_interface import BaseInterface
+from OgreInterface.interfaces.interface import Interface

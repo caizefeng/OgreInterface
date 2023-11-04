@@ -549,23 +549,19 @@ class BaseInterface(ABC):
         return return_str
 
     def _shift_film(
-        self, interface: Structure, shift: Iterable, fractional: bool
-    ) -> tp.Tuple[Structure, Atoms, Structure, Atoms]:
-        shifted_interface_structure = interface.copy()
-        film_ind = np.where(
-            shifted_interface_structure.site_properties["is_film"]
-        )[0]
-        shifted_interface_structure.translate_sites(
-            indices=film_ind,
-            vector=shift,
-            frac_coords=fractional,
-            to_unit_cell=True,
+        self,
+        interface: Structure,
+        shift: tp.Iterable,
+        fractional: bool,
+    ) -> tp.Tuple[Structure, Structure]:
+        shifted_interface_structure = utils.shift_film(
+            interface=interface,
+            shift=shift,
+            fractional=fractional,
         )
 
         (
             shifted_film_structure,
-            _,
-            _,
             _,
         ) = self._get_film_and_substrate_parts(shifted_interface_structure)
 

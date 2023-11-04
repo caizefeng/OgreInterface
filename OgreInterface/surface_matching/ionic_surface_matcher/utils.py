@@ -19,45 +19,6 @@ DATA_PATH = dirname(abspath(data.__file__))
 IONIC_RADII_DF = pd.read_csv(join(DATA_PATH, "ionic_radii_data.csv"))
 
 
-# def _add_r0s(struc):
-#     r0s = []
-
-#     for site in struc:
-#         # atomic_number = site.specie.Z
-#         atomic_number = site.properties["bulk_equivalent"]
-#         if bool(site.properties["is_film"]):
-#             r0s.append(r0_dict["film"][atomic_number])
-#         else:
-#             r0s.append(r0_dict["sub"][atomic_number])
-
-#     struc.add_site_property("r0s", r0s)
-
-
-# def _add_born_ns(struc):
-#     ion_config_to_n_map = {
-#         "1s1": 0.0,
-#         "[He]": 5.0,
-#         "[Ne]": 7.0,
-#         "[Ar]": 9.0,
-#         "[Kr]": 10.0,
-#         "[Xe]": 12.0,
-#     }
-#     n_vals = {}
-
-#     Zs = np.unique(struc.atomic_numbers)
-#     for z in Zs:
-#         element = Element(chemical_symbols[z])
-#         ion_config = element.electronic_structure.split(".")[0]
-#         n_val = ion_config_to_n_map[ion_config]
-#         if _auto_determine_born_n:
-#             n_vals[z] = n_val
-#         else:
-#             n_vals[z] = _born_n
-
-#     ns = [n_vals[z] for z in struc.atomic_numbers]
-#     struc.add_site_property("born_ns", ns)
-
-
 def generate_base_inputs(
     structure: Structure,
     cutoff: float,

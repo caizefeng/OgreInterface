@@ -100,7 +100,12 @@ class IonicShiftedForcePotential:
 
         y_energy = y_coulomb + y_born
 
-        return y_energy.astype(np.float32)
+        return (
+            y_energy.astype(np.float32),
+            y_coulomb.astype(np.float32),
+            y_born.astype(np.float32),
+            y_dsf.astype(np.float32),
+        )
 
     def _calc_B(self, r0_ij, n_ij, q_ij):
         alpha = np.array(0.2, dtype=np.float32)

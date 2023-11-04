@@ -1,35 +1,27 @@
-from typing import List, Dict, Tuple, Optional
-import tpying as tp
+import typing as tp
 import itertools
-
-# from itertools import groupby, combinations_with_replacement, product
-from os.path import join, dirname, split, abspath
 
 from pymatgen.core.periodic_table import Element
 from pymatgen.core.structure import Structure
-from pymatgen.analysis.local_env import CrystalNN
-from pymatgen.io.ase import AseAtomsAdaptor
-from ase.data import chemical_symbols, covalent_radii
-from matscipy.neighbours import neighbour_list
-import pandas as pd
+from ase.data import chemical_symbols
 import numpy as np
 
-from OgreInterface import data
-from OgreInterface.surface_matching.ionic_surface_matcher.input_generator import (
+from OgreInterface.surface_matching.ionic_surface_matcher import (
     generate_input_dict,
     create_batch,
-)
-from OgreInterface.surface_matching.ionic_surface_matcher.ionic_shifted_force_potential import (
     IonicShiftedForcePotential,
+    ionic_utils,
 )
-import OgreInterface.surface_matching.ionic_surface_matcher.utils as ionic_utils
-from OgreInterface.surfaces import Interface
-from OgreInterface.surface_matching.base_surface_matcher import (
+from OgreInterface.surface_matching import (
+    IonicSurfaceEnergy,
     BaseSurfaceMatcher,
 )
 
-
-DATA_PATH = dirname(abspath(data.__file__))
+# from OgreInterface.surface_matching.ionic_surface_matcher.ionic_shifted_force_potential import (
+#     IonicShiftedForcePotential,
+# )
+# import OgreInterface.surface_matching.ionic_surface_matcher.utils as ionic_utils
+from OgreInterface.interfaces import Interface
 
 
 class IonicSurfaceMatcher(BaseSurfaceMatcher):
@@ -63,6 +55,9 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         auto_determine_born_n: bool = False,
         born_n: float = 12.0,
     ):
+        # Cutoff for neighbor finding
+        self._cutoff = 18.0
+
         super().__init__(
             interface=interface,
             grid_density=grid_density,
@@ -74,11 +69,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self.film_supercell.lattice._pbc = (True, True, False)
         self.sub_supercell.lattice._pbc = (True, True, False)
 
-        # Get the ionic radii data from the data module
-        self._ionic_radii_df = pd.read_csv(
-            join(DATA_PATH, "ionic_radii_data.csv")
-        )
-
         # Determined if the born n should be set based on the
         # electron configuration (I think this should just be False)
         self._auto_determine_born_n = auto_determine_born_n
@@ -86,58 +76,27 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         # Manual born n value. (born_n = 12 usually gives best results)
         self._born_n = born_n
 
-        # Cutoff for neighbor finding
-        self._cutoff = 18.0
-
         # Get charge dictionary mapping
         # {"sub":{chemical_symbol: charge}, "film":{chemical_symbols: charge}}
         self.charge_dict = self._get_charges()
 
         # Get bulk equivalent to atomic number mapping
         # {"sub":{bulk_eq: atomic_number}, "film":{bulk_eq: atomic_number}}
-        self.eq_to_Z_dict = self._get_equiv_to_Zs()
+        self.equiv_to_Z_dict = self._get_equiv_to_Zs()
 
         # Get bulk equivalent to ionic radius mapping
         # {"sub":{bulk_eq: radius}, "film":{bulk_eq: radius}}
         self.r0_dict = self._get_r0s()
 
-        # Get max z when searching using PSO
-        self._max_z = self._get_max_z()
-
-        self.surface_energy_module = IonicSurfaceEnergy
-        self.surface_energy_kwargs = {
-            "film": {
-                "oriented_bulk_structure": self.interface.film_oriented_bulk_structure,
-                "layers": self.interface.film.layers,
-                "r0_dict": self.r0_dict["film"],
-                "charge_dict": self.charge_dict["film"],
-            },
-            "sub": {
-                "oriented_bulk_structure": self.interface.substrate_oriented_bulk_structure,
-                "layers": self.interface.substrate.layers,
-                "r0_dict": self.r0_dict["sub"],
-                "charge_dict": self.charge_dict["sub"],
-            },
-        }
-
         # Add born ns to all the structures
-        self._add_born_ns(self.iface)
-        self._add_born_ns(self.sub_sc_part)
-        self._add_born_ns(self.film_sc_part)
+        self._set_born_ns(self.iface)
+        self._set_born_ns(self.sub_supercell)
+        self._set_born_ns(self.film_supercell)
 
         # Add r0s to all the structures
-        self._add_r0s(self.iface)
-        self._add_r0s(self.sub_sc_part)
-        self._add_r0s(self.film_sc_part)
-
-        # Set the interfacial distance
-        self.d_interface = self.interface.interfacial_distance
-
-        # Placeholder for the optimal xy shift
-        self.opt_xy_shift = np.zeros(2)
-
-        # Placeholder for the optimal interfacial distance
-        self.opt_d_interface = self.d_interface
+        self._set_r0s(self.iface)
+        self._set_r0s(self.sub_supercell)
+        self._set_r0s(self.film_supercell)
 
         # Generate the base inputs for the interface
         all_iface_inputs = ionic_utils.generate_base_inputs(
@@ -154,25 +113,128 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             inputs=all_iface_inputs
         )
 
-        # Generate the base inputs for the substrate supercell
-        self.sub_sc_inputs = self._generate_base_inputs(
-            structure=self.sub_sc_part,
-            cutoff=self._cutoff + 5.0,
-        )
-
-        # Generate the base inputs for the film supercell
-        self.film_sc_inputs = self._generate_base_inputs(
-            structure=self.film_sc_part,
-            cutoff=self._cutoff + 5.0,
-        )
-
         (
-            self.film_energy,
-            self.sub_energy,
-            self.film_surface_energy,
-            self.sub_surface_energy,
-            self.const_iface_energy,
-        ) = self._get_const_energies()
+            self.const_born_energy,
+            self.const_coulomb_energy,
+        ) = self._get_constant_interface_terms()
+
+        self.surface_energy_kwargs = {
+            "auto_determine_born_n": self._auto_determine_born_n,
+            "born_n": self._born_n,
+        }
+
+    @property
+    def surface_energy_module(self) -> IonicSurfaceEnergy:
+        return IonicSurfaceEnergy
+
+    def generate_constant_inputs(
+        self,
+        structure: Structure,
+    ) -> tp.Dict[str, np.ndarray]:
+        inputs = generate_input_dict(
+            structure=structure,
+            cutoff=self._cutoff + 5.0,
+        )
+
+        batch_inputs = create_batch(
+            inputs=inputs,
+            batch_size=1,
+        )
+
+        batch_inputs["is_interface"] = False
+
+        return batch_inputs
+
+    def generate_interface_inputs(
+        self,
+        shifts: np.ndarray,
+    ) -> tp.Dict[str, np.ndarray]:
+        batch_inputs = create_batch(
+            inputs=self.iface_inputs,
+            batch_size=len(shifts),
+        )
+
+        ionic_utils.add_shifts_to_batch(
+            batch_inputs=batch_inputs,
+            shifts=shifts,
+        )
+
+        batch_inputs["is_interface"] = True
+
+        return batch_inputs
+
+    def get_optimized_structure(self):
+        # Shift the interface to the optimal inplane positon
+        self.interface.shift_film_inplane(
+            x_shift=self.opt_xy_shift[0],
+            y_shift=self.opt_xy_shift[1],
+            fractional=True,
+        )
+
+        # Set the interfacial distance to the optimal interfacial distance
+        self.interface.set_interfacial_distance(
+            interfacial_distance=self.opt_d_interface
+        )
+
+        # Reset the self.iface property
+        self.iface = self.interface.get_interface(orthogonal=True).copy()
+
+        if self.interface._passivated:
+            H_inds = np.where(np.array(self.iface.atomic_numbers) == 1)[0]
+            self.iface.remove_sites(H_inds)
+
+        # Add the born ns to the iface structure
+        self._set_born_ns(self.iface)
+
+        # Add the r0s to the iface structure
+        self._set_r0s(self.iface)
+
+        # Generate the base inputs for the interface
+        all_iface_inputs = ionic_utils.generate_base_inputs(
+            structure=self.iface,
+            cutoff=self._cutoff + 5.0,
+        )
+
+        # Recalculate the variable iface inputs
+        (
+            _,
+            self.iface_inputs,
+        ) = self._get_constant_and_variable_iface_inputs(
+            inputs=all_iface_inputs
+        )
+
+        # Reset optimal shift values
+        self.opt_xy_shift[:2] = 0.0
+        self.d_interface = self.opt_d_interface
+
+    def calculate(
+        self,
+        inputs: tp.Dict[str, tp.Union[np.ndarray, bool]],
+    ) -> np.ndarray:
+        ionic_potential = IonicShiftedForcePotential(
+            cutoff=self._cutoff,
+        )
+
+        if inputs["is_interface"]:
+            (
+                energy,
+                _,
+                _,
+                _,
+            ) = ionic_potential.forward(
+                inputs=inputs,
+                constant_coulomb_contribution=self.const_coulomb_energy,
+                constant_born_contribution=self.const_born_energy,
+            )
+        else:
+            (
+                energy,
+                _,
+                _,
+                _,
+            ) = ionic_potential.forward(inputs=inputs)
+
+        return energy
 
     def _get_charges(self):
         sub = self.interface.substrate.bulk_structure
@@ -224,7 +286,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
     def _get_max_z(self) -> float:
         charges = self.charge_dict
         r0s = self.r0_dict
-        eq_to_Z = self.eq_to_Z_dict
+        eq_to_Z = self.equiv_to_Z_dict
 
         positive_r0s = []
         negative_r0s = []
@@ -275,7 +337,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return const_inputs, variable_inputs
 
-    def _add_r0s(self, struc):
+    def _set_r0s(self, struc):
         r0s = []
 
         for site in struc:
@@ -287,7 +349,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         struc.add_site_property("r0s", r0s)
 
-    def _add_born_ns(self, struc):
+    def _set_born_ns(self, struc):
         ion_config_to_n_map = {
             "1s1": 0.0,
             "[He]": 5.0,
@@ -311,137 +373,9 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         ns = [n_vals[z] for z in struc.atomic_numbers]
         struc.add_site_property("born_ns", ns)
 
-    def generate_constant_inputs(
-        self,
-        structure: Structure,
-    ) -> tp.Dict[str, np.ndarray]:
-        inputs = generate_input_dict(
-            structure=structure,
-            cutoff=self._cutoff + 5.0,
-        )
-
-        batch_inputs = create_batch(
-            inputs=inputs,
-            batch_size=1,
-        )
-
-        batch_inputs["is_interface"] = False
-
-        return batch_inputs
-
-    def generate_interface_inputs(
-        self,
-        shifts: np.ndarray,
-    ) -> tp.Dict[str, np.ndarray]:
-        batch_inputs = create_batch(
-            inputs=self._iface_inputs,
-            batch_size=len(shifts),
-        )
-
-        self._add_shifts_to_batch(
-            batch_inputs=batch_inputs,
-            shifts=shifts,
-        )
-
-        batch_inputs["is_interface"] = True
-
-        return batch_inputs
-
-    def get_optimized_structure(self):
-        opt_shift = self.opt_xy_shift
-
-        self.interface.shift_film_inplane(
-            x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
-        )
-        self.interface.set_interfacial_distance(
-            interfacial_distance=self.opt_d_interface
-        )
-
-        self.iface = self.interface.get_interface(orthogonal=True).copy()
-
-        if self.interface._passivated:
-            H_inds = np.where(np.array(self.iface.atomic_numbers) == 1)[0]
-            self.iface.remove_sites(H_inds)
-
-        self._add_born_ns(self.iface)
-        self._add_r0s(self.iface)
-        iface_inputs = self._generate_base_inputs(
-            structure=self.iface,
-            is_slab=True,
-        )
-        _, self.iface_inputs = self._get_constant_and_variable_iface_inputs(
-            inputs=iface_inputs
-        )
-
-        self.opt_xy_shift[:2] = 0.0
-        self.d_interface = self.opt_d_interface
-
-    def pso_function(self, x):
-        cart_xy = self.get_cart_xy_shifts(x[:, :2])
-        z_shift = x[:, -1] - self.d_interface
-        shift = np.c_[cart_xy, z_shift]
-        batch_inputs = create_batch(
-            inputs=self.iface_inputs,
-            batch_size=len(x),
-        )
-
-        self._add_shifts_to_batch(
-            batch_inputs=batch_inputs,
-            shifts=shift,
-        )
-
-        E, _, _, _, _ = self._calculate(
-            inputs=batch_inputs,
-            is_interface=True,
-        )
-        E_adh, E_iface = self._get_interface_energy(total_energies=E)
-
-        return E_iface
-
-    def optimizePSO(
-        self,
-        z_bounds: Optional[List[float]] = None,
-        max_iters: int = 200,
-        n_particles: int = 15,
-    ) -> float:
-        """
-        This function will optimize the interface structure in 3D using Particle Swarm Optimization
-
-        Args:
-            z_bounds: A list defining the maximum and minumum interfacial distance [min, max]
-            max_iters: Maximum number of iterations of the PSO algorithm
-            n_particles: Number of particles to use for the swarm (10 - 20 is usually sufficient)
-
-        Returns:
-            The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
-        """
-        if z_bounds is None:
-            z_bounds = [0.5, max(3.5, 1.2 * self._max_z)]
-
-        opt_score, opt_pos = self._optimizerPSO(
-            func=self.pso_function,
-            z_bounds=z_bounds,
-            max_iters=max_iters,
-            n_particles=n_particles,
-        )
-
-        opt_cart = self.get_cart_xy_shifts(opt_pos[:2].reshape(1, -1))
-        opt_cart = np.c_[opt_cart, np.zeros(1)]
-        opt_frac = opt_cart.dot(self.inv_matrix)[0]
-
-        self.opt_xy_shift = opt_frac[:2]
-        self.opt_d_interface = opt_pos[-1]
-
-        return opt_score
-
-    def _get_const_energies(self):
-        sub_sc_inputs = create_batch(
-            inputs=self.sub_sc_inputs,
-            batch_size=1,
-        )
-        film_sc_inputs = create_batch(
-            inputs=self.film_sc_inputs,
-            batch_size=1,
+    def _get_constant_interface_terms(self):
+        ionic_potential = IonicShiftedForcePotential(
+            cutoff=self._cutoff,
         )
 
         const_iface_inputs = create_batch(
@@ -449,58 +383,11 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             batch_size=1,
         )
 
-        sub_sc_energy, _, _, _, _ = self._calculate(
-            sub_sc_inputs,
-            is_interface=False,
-        )
-        film_sc_energy, _, _, _, _ = self._calculate(
-            film_sc_inputs,
-            is_interface=False,
-        )
-
         (
-            const_iface_energy,
             _,
-            self.const_born_energy,
-            self.const_coulomb_energy,
             _,
-        ) = self._calculate(
-            const_iface_inputs,
-            is_interface=False,
-        )
+            constant_born,
+            constant_coulomb,
+        ) = ionic_potential.forward(inputs=const_iface_inputs)
 
-        film_surface_energy_calc = self.surface_energy_module(
-            **self.surface_energy_kwargs["film"]
-        )
-        film_surface_energy = film_surface_energy_calc.get_cleavage_energy()
-
-        sub_surface_energy_calc = self.surface_energy_module(
-            **self.surface_energy_kwargs["sub"]
-        )
-        sub_surface_energy = sub_surface_energy_calc.get_cleavage_energy()
-
-        return (
-            film_sc_energy[0],
-            sub_sc_energy[0],
-            film_surface_energy,
-            sub_surface_energy,
-            const_iface_energy[0],
-        )
-
-    def calculate(self, inputs: Dict):
-        ionic_potential = IonicShiftedForcePotential(
-            cutoff=self._cutoff,
-        )
-
-        if inputs["is_interface"]:
-            energy = ionic_potential.forward(
-                inputs=inputs,
-                constant_coulomb_contribution=self.const_coulomb_energy,
-                constant_born_contribution=self.const_born_energy,
-            )
-        else:
-            energy = ionic_potential.forward(
-                inputs=inputs,
-            )
-
-        return energy
+        return constant_born, constant_coulomb

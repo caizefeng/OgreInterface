@@ -1,27 +1,27 @@
-import tpying as tp
+import typing as tp
 import copy
 import os
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, ABCMeta, abstractmethod, abstractproperty
+import itertools
 
 from pymatgen.core.structure import Structure
 from matplotlib.colors import Normalize, ListedColormap
 from matplotlib.cm import ScalarMappable
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from matplotlib.patches import Polygon
 from scipy.interpolate import RectBivariateSpline, CubicSpline
 import numpy as np
 from sko.PSO import PSO
 from sko.tools import set_run_mode
 from tqdm import tqdm
+from ase.data import covalent_radii
 
-from OgreInterface.surfaces import Interface
+from OgreInterface.interfaces import BaseInterface
+from OgreInterface.surfaces import BaseSurface
+from OgreInterface.surface_matching.base_surface_energy import (
+    BaseSurfaceEnergy,
+)
 from OgreInterface import utils
-
-# from OgreInterface.score_function import (
-#     generate_input_dict,
-#     create_batch,
-# )
 
 
 def _tqdm_run(self, max_iter=None, precision=None, N=20):
@@ -63,7 +63,18 @@ def _tqdm_run(self, max_iter=None, precision=None, N=20):
 PSO.run = _tqdm_run
 
 
-class BaseSurfaceMatcher(ABC):
+class PostInitCaller(type):
+    def __call__(cls, *args, **kwargs):
+        obj = type.__call__(cls, *args, **kwargs)
+        obj.__post_init__()
+        return obj
+
+
+class CombinedPostInitCaller(PostInitCaller, ABCMeta):
+    pass
+
+
+class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
     """Base Class for all other surface matching classes
 
     The BaseSurfaceMatcher contains all the basic methods to perform surface matching
@@ -77,7 +88,7 @@ class BaseSurfaceMatcher(ABC):
 
     def __init__(
         self,
-        interface: Interface,
+        interface: BaseInterface,
         grid_density: float = 2.5,
     ):
         # Interface or Molecular Interface Object
@@ -117,23 +128,6 @@ class BaseSurfaceMatcher(ABC):
             )[0]
             self.sub_supercell.remove_sites(H_inds)
 
-        # Dictionary of constant structures
-        self.constant_structure_dict = {
-            "film_supercell": self.film_supercell,
-            "sub_supercell": self.sub_supercell,
-        }
-
-        # Dictionary of the total energies of the constant structures
-        (
-            self.film_supercell_energy,
-            self.sub_supercell_energy,
-        ) = self.precalculate_supercell_energies()
-
-        (
-            self.film_surface_energy,
-            self.sub_supercell_energy,
-        ) = self.precalculate_surface_energies()
-
         # Get the lattice matrix of the interface
         self.matrix = copy.deepcopy(
             interface._orthogonal_structure.lattice.matrix
@@ -161,6 +155,29 @@ class BaseSurfaceMatcher(ABC):
         # Generate the shifts for the 2D PES
         self.shifts = self._generate_shifts()
 
+        # Set the interfacial distance
+        self.d_interface = self.interface.interfacial_distance
+
+        # Placeholder for the optimal xy shift
+        self.opt_xy_shift = np.zeros(2)
+
+        # Placeholder for the optimal interfacial distance
+        self.opt_d_interface = self.d_interface
+
+        # Placeholder for surface energy kwargs
+        self.surface_energy_kwargs = {}
+
+    def __post_init__(self):
+        (
+            self.film_supercell_energy,
+            self.sub_supercell_energy,
+        ) = self.precalculate_supercell_energies()
+
+        (
+            self.film_surface_energy,
+            self.sub_surface_energy,
+        ) = self.precalculate_surface_energies()
+
     @abstractmethod
     def generate_constant_inputs(
         self,
@@ -176,7 +193,6 @@ class BaseSurfaceMatcher(ABC):
     @abstractmethod
     def generate_interface_inputs(
         self,
-        structure: Structure,
         shifts: np.ndarray,
     ):
         """
@@ -186,12 +202,52 @@ class BaseSurfaceMatcher(ABC):
         pass
 
     @abstractmethod
-    def calculate(self, inupts):
+    def calculate(self, inputs) -> np.ndarray:
         """
         This method is used to calculate the total energy of the structure with
         the given method of calculating the energy (i.e. DFT, ML-potential)
         """
         pass
+
+    @property
+    @abstractmethod
+    def surface_energy_module(self) -> BaseSurfaceEnergy:
+        """
+        Set the surface energy module here
+        """
+        pass
+
+    def get_optimized_structure(self):
+        """
+        This method is used to shift the input Interface to the current
+        self.opt_xy_shift and self.opt_d_interface values. This should redo
+        any preprocessing steps applied to the interface in the __init__()
+        function of the inheriting class. It might have to be overidden. See
+        the IonicSurfaceMatcher as an example.
+        """
+
+        # Shift the interface to the optimal inplane positon
+        self.interface.shift_film_inplane(
+            x_shift=self.opt_xy_shift[0],
+            y_shift=self.opt_xy_shift[1],
+            fractional=True,
+        )
+
+        # Set the interfacial distance to the optimal interfacial distance
+        self.interface.set_interfacial_distance(
+            interfacial_distance=self.opt_d_interface
+        )
+
+        # Reset the self.iface property
+        self.iface = self.interface.get_interface(orthogonal=True).copy()
+
+        if self.interface._passivated:
+            H_inds = np.where(np.array(self.iface.atomic_numbers) == 1)[0]
+            self.iface.remove_sites(H_inds)
+
+        # Reset optimal shift values
+        self.opt_xy_shift[:2] = 0.0
+        self.d_interface = self.opt_d_interface
 
     def precalculate_supercell_energies(self) -> tp.Tuple[float, float]:
         """
@@ -216,92 +272,25 @@ class BaseSurfaceMatcher(ABC):
         film and substrate
         """
         film_surface_energy = self._get_surface_energy(
-            oriented_bulk_structure=self.film_obs,
-            layers=self.interface.film.layers,
+            surface=self.interface.film
         )
+
         sub_surface_energy = self._get_surface_energy(
-            oriented_bulk_structure=self.sub_obs,
-            layers=self.interface.substrate.layers,
+            surface=self.interface.substrate
         )
 
         return film_surface_energy, sub_surface_energy
 
     def _get_surface_energy(
         self,
-        oriented_bulk_structure: Structure,
-        layers: int,
+        surface: BaseSurface,
     ) -> float:
-        # Lattice matrix of the OBS structure
-        matrix = oriented_bulk_structure.lattice.matrix
-
-        # Area of the OBS structure (slab cross section)
-        surface_area = np.linalg.norm(np.cross(matrix[0], matrix[1]))
-
-        # Slab generated from the OBS
-        slab = utils.get_layer_supercell(
-            structure=oriented_bulk_structure,
-            layers=layers,
+        surfE = self.surface_energy_module(
+            surface, **self.surface_energy_kwargs
         )
+        cleavage_energy = surfE.get_cleavage_energy()
 
-        # Self interface generated from the OBS
-        double_slab = utils.get_layer_supercell(
-            structure=oriented_bulk_structure,
-            layers=2 * layers,
-        )
-
-        # Layer index property
-        double_slab_layers = np.array(
-            self.double_slab.site_properties["layer_index"]
-        )
-
-        # Is film site properties
-        is_film = (double_slab_layers >= layers).astype(bool)
-
-        # Add the is_film property to the self interface
-        double_slab.add_site_property(
-            "is_film",
-            is_film.tolist(),
-        )
-
-        # Get the default interfacial distance
-        top_sub = double_slab.cart_coords[~is_film][:, -1].max()
-        bot_film = double_slab.cart_coords[is_film][:, -1].min()
-        default_distance = bot_film - top_sub
-
-        interfacial_distances = np.linspace(
-            0.5 * default_distance,
-            2.0 * default_distance,
-            21,
-        )
-
-        zeros = np.zeros(len(interfacial_distances))
-        shifts = np.c_[zeros, zeros, interfacial_distances - default_distance]
-
-        double_slab_inputs = self.generate_interface_inputs(
-            structure=double_slab,
-            shifts=shifts,
-        )
-        double_slab_energies = self.calculate(inputs=double_slab_inputs)
-
-        slab_inputs = self.generate_constant_inputs(structure=slab)
-        slab_energy = self.calculate(inputs=slab_inputs)[0]
-
-        cleavage_energy = (double_slab_energies - (2 * slab_energy)) / (
-            2 * surface_area
-        )
-
-        cs = CubicSpline(interfacial_distances, cleavage_energy)
-
-        interp_x = np.linspace(
-            interfacial_distances.min(),
-            interfacial_distances.max(),
-            201,
-        )
-        interp_y = cs(interp_x)
-
-        opt_E = -np.min(interp_y)
-
-        return opt_E
+        return cleavage_energy
 
     def get_adhesion_energy(
         self,
@@ -326,6 +315,12 @@ class BaseSurfaceMatcher(ABC):
         )
 
         return interface_energies
+
+    def _get_max_z(self) -> float:
+        atomic_numbers = np.unique(self.iface.atomic_numbers)
+        max_covalent_radius = max([covalent_radii[i] for i in atomic_numbers])
+
+        return 2 * max_covalent_radius
 
     def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 25):
         set_run_mode(func, mode="vectorization")
@@ -842,7 +837,6 @@ class BaseSurfaceMatcher(ABC):
 
         for batch_shift in shifts:
             batch_inputs = self.generate_interface_inputs(
-                structure=self.iface,
                 shifts=batch_shift,
             )
             batch_total_energies = self.calculate(inputs=batch_inputs)
@@ -942,7 +936,6 @@ class BaseSurfaceMatcher(ABC):
         total_energies = []
         for batch_shift in batch_shifts:
             batch_inputs = self.generate_interface_inputs(
-                structure=self.iface_inputs,
                 shifts=batch_shift.reshape(1, -1),
             )
             batch_total_energies = self.calculate(inputs=batch_inputs)
@@ -1031,7 +1024,6 @@ class BaseSurfaceMatcher(ABC):
             Interface or Adhesion energy of the interface
         """
         inputs = self.generate_interface_inputs(
-            structure=self.iface,
             shifts=np.zeros(1, 3),
         )
 
@@ -1048,6 +1040,31 @@ class BaseSurfaceMatcher(ABC):
         I want SurfaceMatcher(energy_module=IonicPotential) SurfaceEnergy(energy_module=IonicPotential)
         the EnergyModule needs to handle an Interface and Surface object
     """
+
+    def _PSO_function(self, particle_positions: np.ndarray) -> np.ndarray:
+        # Get the cartesian xy shift from the fractional coords
+        # of the smallest surface unit cell
+        cart_xy = self.get_cart_xy_shifts(particle_positions[:, :2])
+
+        # Get the shift in the z-directions
+        z_shift = particle_positions[:, -1] - self.d_interface
+
+        # Concatenate the shift array
+        shifts = np.c_[cart_xy, z_shift]
+
+        inputs = self.generate_interface_inputs(shifts=shifts)
+
+        total_energies = self.calculate(inputs=inputs)
+
+        adhesion_energies = self.get_adhesion_energy(
+            total_energies=total_energies
+        )
+
+        interface_energies = self.get_interface_energy(
+            adhesion_energies=adhesion_energies
+        )
+
+        return interface_energies
 
     def optimizePSO(
         self,
@@ -1066,21 +1083,34 @@ class BaseSurfaceMatcher(ABC):
         Returns:
             The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
         """
+        set_run_mode(self._PSO_function, mode="vectorization")
+
         if z_bounds is None:
-            z_bounds = [0.5, max(3.5, 1.2 * self._max_z)]
+            max_z = self._get_max_z()
+            z_bounds = [0.5, max(3.5, 1.2 * max_z)]
 
-        opt_score, opt_pos = self._optimizerPSO(
-            func=self.pso_function,
-            z_bounds=z_bounds,
-            max_iters=max_iters,
-            n_particles=n_particles,
+        print("Running 3D Surface Matching with Particle Swarm Optimization:")
+        optimizer = PSO(
+            func=self._PSO_function,
+            pop=n_particles,
+            max_iter=max_iters,
+            lb=[0.0, 0.0, z_bounds[0]],
+            ub=[1.0, 1.0, z_bounds[1]],
+            w=0.9,
+            c1=0.5,
+            c2=0.3,
+            verbose=False,
+            dim=3,
         )
+        optimizer.run()
+        opt_score = optimizer.gbest_y
+        opt_position = optimizer.gbest_x
 
-        opt_cart = self.get_cart_xy_shifts(opt_pos[:2].reshape(1, -1))
-        opt_cart = np.c_[opt_cart, np.zeros(1)]
-        opt_frac = opt_cart.dot(self.inv_matrix)[0]
+        opt_cart_xy = self.get_cart_xy_shifts(opt_position[:2].reshape(1, -1))
+        opt_cart_xy = np.c_[opt_cart_xy, np.zeros(1)]
+        opt_frac_xy = opt_cart_xy.dot(self.inv_matrix)[0]
 
-        self.opt_xy_shift = opt_frac[:2]
-        self.opt_d_interface = opt_pos[-1]
+        self.opt_xy_shift = opt_frac_xy[:2]
+        self.opt_d_interface = opt_position[-1]
 
         return opt_score

@@ -1,6 +1,5 @@
-from typing import List, Dict
 import typing as tp
-from abc import ABC, abstractmethod
+from abc import ABC, ABCMeta, abstractmethod
 
 from pymatgen.core.structure import Structure
 import numpy as np
@@ -8,6 +7,20 @@ from scipy.interpolate import CubicSpline
 
 from OgreInterface.surfaces import BaseSurface
 from OgreInterface import utils
+
+
+# class PostInitCaller(type):
+#     def __call__(cls, *args, **kwargs):
+#         obj = type.__call__(cls, *args, **kwargs)
+#         obj.__post_init__()
+#         return obj
+
+
+# class CombinedPostInitCaller(PostInitCaller, ABCMeta):
+#     pass
+
+
+# , metaclass=CombinedPostInitCaller
 
 
 class BaseSurfaceEnergy(ABC):
@@ -71,6 +84,7 @@ class BaseSurfaceEnergy(ABC):
         # Get the default interfacial distance
         top_sub = self.double_slab.cart_coords[~is_film][:, -1].max()
         bot_film = self.double_slab.cart_coords[is_film][:, -1].min()
+
         self._default_distance = bot_film - top_sub
 
     @abstractmethod
@@ -91,34 +105,6 @@ class BaseSurfaceEnergy(ABC):
     @abstractmethod
     def calculate(self, inputs):
         pass
-
-    # def _generate_base_inputs(
-    #     self,
-    #     structure: Structure,
-    #     is_slab: bool = True,
-    # ):
-    #     inputs = generate_input_dict(
-    #         structure=structure,
-    #         cutoff=self._cutoff + 5.0,
-    #         interface=is_slab,
-    #     )
-
-    #     return inputs
-
-    # def _add_shifts_to_batch(
-    #     self,
-    #     batch_inputs: Dict[str, np.ndarray],
-    #     shifts: np.ndarray,
-    # ) -> None:
-    #     if "is_film" in batch_inputs:
-    #         n_atoms = batch_inputs["n_atoms"]
-    #         all_shifts = np.repeat(
-    #             shifts.astype(batch_inputs["R"].dtype), repeats=n_atoms, axis=0
-    #         )
-    #         all_shifts[~batch_inputs["is_film"]] *= 0.0
-    #         batch_inputs["R"] += all_shifts
-    #     else:
-    #         raise "_add_shifts_to_batch should only be used on interfaces that have the is_film property"
 
     def get_cleavage_energy(self):
         """This function calculates the negated adhesion energy of an interface as a function of the interfacial distance
@@ -148,12 +134,11 @@ class BaseSurfaceEnergy(ABC):
         shifts = np.c_[zeros, zeros, interfacial_distances - default_distance]
 
         double_slab_inputs = self.generate_interface_inputs(
-            structure=self.slab,
             shifts=shifts,
         )
         double_slab_energies = self.calculate(inputs=double_slab_inputs)
 
-        slab_inputs = self.generate_constant_inputs(structure=self.double_slab)
+        slab_inputs = self.generate_constant_inputs(structure=self.slab)
         slab_energy = self.calculate(inputs=slab_inputs)[0]
 
         cleavage_energy = (double_slab_energies - (2 * slab_energy)) / (
