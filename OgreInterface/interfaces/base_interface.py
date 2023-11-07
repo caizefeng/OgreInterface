@@ -675,12 +675,15 @@ class BaseInterface(ABC):
                         supercell.site_properties[layer_key]
                     )
                     not_hydrogen = layer_index != -1
-                    is_film = supercell.site_properties["is_film"]
-                    is_sub = supercell.site_properties["is_sub"]
+                    is_film = np.array(supercell.site_properties["is_film"])
+                    is_sub = np.array(supercell.site_properties["is_sub"])
                     layer_index[(is_film & not_hydrogen)] += (
                         layer_index[is_sub].max() + 1
                     )
-                    supercell.add_site_property(layer_key, layer_index)
+                    supercell.add_site_property(
+                        layer_key,
+                        layer_index.tolist(),
+                    )
 
             basis = self.substrate.crystallographic_basis
         else:
@@ -699,10 +702,13 @@ class BaseInterface(ABC):
                     layer_index = np.array(
                         supercell.site_properties[layer_key]
                     )
-                    is_film = supercell.site_properties["is_film"]
-                    is_sub = supercell.site_properties["is_sub"]
+                    is_film = np.array(supercell.site_properties["is_film"])
+                    is_sub = np.array(supercell.site_properties["is_sub"])
                     layer_index[is_film] += layer_index[is_sub].max() + 1
-                    supercell.add_site_property(layer_key, layer_index)
+                    supercell.add_site_property(
+                        layer_key,
+                        layer_index.tolist(),
+                    )
 
             basis = self.film.crystallographic_basis
 
@@ -932,11 +938,15 @@ class BaseInterface(ABC):
             if key in strained_sub.site_properties
             and key in strained_film.site_properties
         }
-        interface_site_properties["is_sub"] = np.array(
-            [True] * len(strained_sub) + [False] * len(strained_film)
+        interface_site_properties["is_sub"] = (
+            np.array([True] * len(strained_sub) + [False] * len(strained_film))
+            .astype(bool)
+            .tolist()
         )
-        interface_site_properties["is_film"] = np.array(
-            [False] * len(strained_sub) + [True] * len(strained_film)
+        interface_site_properties["is_film"] = (
+            np.array([False] * len(strained_sub) + [True] * len(strained_film))
+            .astype(bool)
+            .tolist()
         )
 
         # Create the non-orthogonalized interface structure
@@ -1207,206 +1217,6 @@ class BaseInterface(ABC):
         sub_dict.update(film_dict)
 
         return sub_dict
-
-    def _generate_sc_for_interface_view(
-        self, struc, transformation_matrix
-    ) -> tp.Tuple[Structure, np.ndarray]:
-        plot_struc = Structure(
-            lattice=struc.lattice,
-            species=["H"],
-            coords=np.zeros((1, 3)),
-            to_unit_cell=True,
-            coords_are_cartesian=True,
-        )
-        plot_struc.make_supercell(transformation_matrix)
-        inv_matrix = plot_struc.lattice.inv_matrix
-
-        return plot_struc, inv_matrix
-
-    def _plot_interface_view(
-        self,
-        ax,
-        zero_coord,
-        supercell_shift,
-        cell_vetices,
-        slab_matrix,
-        sc_inv_matrix,
-        facecolor,
-        edgecolor,
-        is_film=False,
-        strain=True,
-    ) -> None:
-        cart_coords = (
-            zero_coord + supercell_shift + cell_vetices.dot(slab_matrix)
-        )
-        fc = np.round(cart_coords.dot(sc_inv_matrix), 3)
-        if is_film:
-            if strain:
-                strain_matrix = self._strain_matrix
-                strain_matrix[-1] = np.array([0, 0, 1])
-                plot_coords = cart_coords @ strain_matrix
-            else:
-                plot_coords = cart_coords
-
-            linewidth = 1.0
-        else:
-            plot_coords = cart_coords
-            linewidth = 2.0
-
-        center = np.round(
-            np.mean(cart_coords[:-1], axis=0).dot(sc_inv_matrix),
-            3,
-        )
-        center_in = np.logical_and(-0.0001 <= center[:2], center[:2] <= 1.0001)
-
-        x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
-        y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
-        point_in = np.logical_and(x_in, y_in)
-
-        if point_in.any() or center_in.all():
-            poly = Polygon(
-                xy=plot_coords[:, :2],
-                closed=True,
-                facecolor=facecolor,
-                edgecolor=edgecolor,
-                linewidth=linewidth,
-            )
-            ax.add_patch(poly)
-
-    def _get_image(
-        self,
-        zero_coord,
-        supercell_shift,
-        cell_vetices,
-        slab_matrix,
-        slab_inv_matrix,
-        sc_inv_matrix,
-    ) -> tp.Union[None, np.ndarray]:
-        cart_coords = (
-            zero_coord + supercell_shift + cell_vetices.dot(slab_matrix)
-        )
-        fc = np.round(cart_coords.dot(sc_inv_matrix), 3)
-        center = np.round(
-            np.mean(cart_coords[:-1], axis=0).dot(sc_inv_matrix),
-            3,
-        )
-        center_in = np.logical_and(-0.0001 <= center[:2], center[:2] <= 1.0001)
-
-        x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
-        y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
-        point_in = np.logical_and(x_in, y_in)
-
-        if point_in.any() or center_in.all():
-            shifted_zero_coord = zero_coord + supercell_shift
-            shifted_zero_frac = shifted_zero_coord.dot(slab_inv_matrix)
-
-            return np.round(shifted_zero_frac).astype(int)
-        else:
-            return None
-
-    def _get_oriented_cell_and_images(
-        self, strain: bool = True
-    ) -> tp.List[np.ndarray]:
-        sub_struc = self.substrate._orthogonal_slab_structure.copy()
-        sub_a_to_i_op = SymmOp.from_rotation_and_translation(
-            rotation_matrix=self._substrate_a_to_i, translation_vec=np.zeros(3)
-        )
-        sub_struc.apply_operation(sub_a_to_i_op)
-
-        film_struc = self.film._orthogonal_slab_structure.copy()
-        film_a_to_i_op = SymmOp.from_rotation_and_translation(
-            rotation_matrix=self._film_a_to_i, translation_vec=np.zeros(3)
-        )
-        film_struc.apply_operation(film_a_to_i_op)
-
-        if strain:
-            film_struc = utils.apply_strain_matrix(
-                structure=film_struc,
-                strain_matrix=self._film_strain_matrix,
-            )
-            sub_struc = utils.apply_strain_matrix(
-                structure=sub_struc,
-                strain_matrix=self._substrate_strain_matrix,
-            )
-
-        sub_matrix = sub_struc.lattice.matrix
-        film_matrix = film_struc.lattice.matrix
-
-        prim_sub_inv_matrix = sub_struc.lattice.inv_matrix
-        prim_film_inv_matrix = film_struc.lattice.inv_matrix
-
-        sub_sc_matrix = deepcopy(self._substrate_supercell.lattice.matrix)
-        film_sc_matrix = deepcopy(self._film_supercell.lattice.matrix)
-
-        coords = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0, 0, 0],
-            ]
-        )
-
-        sc_shifts = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [0, 1, 0],
-                [-1, 0, 0],
-                [0, -1, 0],
-                [1, 1, 0],
-                [-1, -1, 0],
-                [1, -1, 0],
-                [-1, 1, 0],
-            ]
-        )
-
-        sub_sc_shifts = sc_shifts.dot(sub_sc_matrix)
-        film_sc_shifts = sc_shifts.dot(film_sc_matrix)
-
-        sub_struc, sub_inv_matrix = self._generate_sc_for_interface_view(
-            struc=sub_struc,
-            transformation_matrix=self.match.substrate_sl_transform,
-        )
-
-        film_struc, film_inv_matrix = self._generate_sc_for_interface_view(
-            struc=film_struc,
-            transformation_matrix=self.match.film_sl_transform,
-        )
-
-        sub_images = []
-
-        for c in sub_struc.cart_coords:
-            for shift in sub_sc_shifts:
-                sub_image = self._get_image(
-                    zero_coord=c,
-                    supercell_shift=shift,
-                    cell_vetices=coords,
-                    slab_matrix=sub_matrix,
-                    slab_inv_matrix=prim_sub_inv_matrix,
-                    sc_inv_matrix=sub_inv_matrix,
-                )
-
-                if sub_image is not None:
-                    sub_images.append(sub_image)
-
-        film_images = []
-
-        for c in film_struc.cart_coords:
-            for shift in film_sc_shifts:
-                film_image = self._get_image(
-                    zero_coord=c,
-                    supercell_shift=shift,
-                    cell_vetices=coords,
-                    slab_matrix=film_matrix,
-                    slab_inv_matrix=prim_film_inv_matrix,
-                    sc_inv_matrix=film_inv_matrix,
-                )
-                if film_image is not None:
-                    film_images.append(film_image)
-
-        return sub_matrix, sub_images, film_matrix, film_images
 
     def plot_interface(
         self,

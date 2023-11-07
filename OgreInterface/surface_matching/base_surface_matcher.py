@@ -935,8 +935,9 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
 
         total_energies = []
         for batch_shift in batch_shifts:
+            print(batch_shift.shape)
             batch_inputs = self.generate_interface_inputs(
-                shifts=batch_shift.reshape(1, -1),
+                shifts=batch_shift,
             )
             batch_total_energies = self.calculate(inputs=batch_inputs)
             total_energies.append(batch_total_energies)
@@ -1024,7 +1025,7 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
             Interface or Adhesion energy of the interface
         """
         inputs = self.generate_interface_inputs(
-            shifts=np.zeros(1, 3),
+            shifts=np.zeros((1, 3)),
         )
 
         total_energy = self.calculate(inputs)[0]

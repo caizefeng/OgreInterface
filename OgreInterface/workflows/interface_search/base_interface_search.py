@@ -1,8 +1,9 @@
-from typing import Union, List, Tuple, Optional
-from os.path import isdir, join
+from abc import ABC
+import typing as tp
+from os.path import isdir, join, abspath
 import os
+import json
 
-from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.core.structure import Structure
 from ase import Atoms
 import numpy as np
@@ -10,14 +11,16 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from OgreInterface.generate import InterfaceGenerator, SurfaceGenerator
-from OgreInterface.surface_match import IonicSurfaceMatcher
-from OgreInterface.surface_energy import IonicSurfaceEnergy
-from OgreInterface.plotting_tools import plot_surface_charge_matrix
+from OgreInterface.generate import InterfaceGenerator, BaseSurfaceGenerator
+from OgreInterface.surface_matching import (
+    BaseSurfaceMatcher,
+    BaseSurfaceEnergy,
+)
+from OgreInterface.surfaces import BaseSurface
 from OgreInterface import utils
 
 
-class IonicInterfaceSearch:
+class BaseInterfaceSearch(ABC):
     """Class to perform a miller index scan to find all domain matched interfaces of various surfaces.
 
     Examples:
@@ -44,42 +47,62 @@ class IonicInterfaceSearch:
 
     def __init__(
         self,
-        substrate_bulk: Union[Structure, Atoms, str],
-        film_bulk: Union[Structure, Atoms, str],
-        substrate_miller_index: List[int],
-        film_miller_index: List[int],
+        surface_matching_module: BaseSurfaceMatcher,
+        surface_energy_module: BaseSurfaceEnergy,
+        surface_generator: BaseSurfaceGenerator,
+        substrate_bulk: tp.Union[Structure, Atoms, str],
+        film_bulk: tp.Union[Structure, Atoms, str],
+        substrate_miller_index: tp.List[int],
+        film_miller_index: tp.List[int],
+        surface_matching_kwargs: tp.Dict[str, tp.Any] = {},
+        surface_energy_kwargs: tp.Dict[str, tp.Any] = {},
         minimum_slab_thickness: float = 18.0,
         max_strain: float = 0.01,
-        max_area_mismatch: Optional[float] = None,
-        max_area: Optional[float] = None,
+        max_area_mismatch: tp.Optional[float] = None,
+        max_area: tp.Optional[float] = None,
         substrate_strain_fraction: float = 0.0,
         refine_structure: bool = True,
         suppress_warnings: bool = True,
-        auto_determine_born_n: bool = False,
-        born_n: float = 12.0,
         n_particles_PSO: int = 20,
         max_iterations_PSO: int = 150,
-        z_bounds_PSO: Optional[List[float]] = None,
+        z_bounds_PSO: tp.Optional[tp.List[float]] = None,
         grid_density_PES: float = 2.5,
         use_most_stable_substrate: bool = True,
         cmap_PES="coolwarm",
     ):
+        self.surface_matching_module = surface_matching_module
+        self.surface_energy_module = surface_energy_module
+        self.surface_generator = surface_generator
+        self.surface_matching_kwargs = surface_matching_kwargs
+        self.surface_energy_kwargs = surface_energy_kwargs
         self._refine_structure = refine_structure
         self._suppress_warnings = suppress_warnings
         if type(substrate_bulk) is str:
-            self._substrate_bulk, _ = self._get_bulk(
-                Structure.from_file(substrate_bulk)
+            self._substrate_bulk = utils.load_bulk(
+                atoms_or_structure=Structure.from_file(substrate_bulk),
+                refine_structure=self._refine_structure,
+                suppress_warnings=self._suppress_warnings,
             )
         else:
-            self._substrate_bulk, _ = self._get_bulk(substrate_bulk)
+            self._substrate_bulk = utils.load_bulk(
+                atoms_or_structure=substrate_bulk,
+                refine_structure=self._refine_structure,
+                suppress_warnings=self._suppress_warnings,
+            )
 
         if type(film_bulk) is str:
-            self._film_bulk, _ = self._get_bulk(Structure.from_file(film_bulk))
+            self._film_bulk = utils.load_bulk(
+                atoms_or_structure=Structure.from_file(film_bulk),
+                refine_structure=self._refine_structure,
+                suppress_warnings=self._suppress_warnings,
+            )
         else:
-            self._film_bulk, _ = self._get_bulk(film_bulk)
+            self._film_bulk = utils.load_bulk(
+                atoms_or_structure=film_bulk,
+                refine_structure=self._refine_structure,
+                suppress_warnings=self._suppress_warnings,
+            )
 
-        self._auto_determine_born_n = auto_determine_born_n
-        self._born_n = born_n
         self._n_particles_PSO = n_particles_PSO
         self._max_iterations_PSO = max_iterations_PSO
         self._z_bounds_PSO = z_bounds_PSO
@@ -94,112 +117,35 @@ class IonicInterfaceSearch:
         self._max_area = max_area
         self._cmap_PES = cmap_PES
 
-    def _get_bulk(self, atoms_or_struc):
-        if type(atoms_or_struc) is Atoms:
-            init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
-        elif type(atoms_or_struc) is Structure:
-            init_structure = atoms_or_struc
-        else:
-            raise TypeError(
-                f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
-            )
-
-        if self._refine_structure:
-            conventional_structure = utils.spglib_standardize(
-                init_structure,
-                to_primitive=False,
-                no_idealize=False,
-            )
-
-            init_angles = init_structure.lattice.angles
-            init_lengths = init_structure.lattice.lengths
-            init_length_and_angles = np.concatenate(
-                [list(init_lengths), list(init_angles)]
-            )
-
-            conv_angles = conventional_structure.lattice.angles
-            conv_lengths = conventional_structure.lattice.lengths
-            conv_length_and_angles = np.concatenate(
-                [list(conv_lengths), list(conv_angles)]
-            )
-
-            if not np.isclose(
-                conv_length_and_angles - init_length_and_angles, 0
-            ).all():
-                if not self._suppress_warnings:
-                    labels = ["a", "b", "c", "alpha", "beta", "gamma"]
-                    init_cell_str = ", ".join(
-                        [
-                            f"{label} = {val:.3f}"
-                            for label, val in zip(
-                                labels, init_length_and_angles
-                            )
-                        ]
-                    )
-                    conv_cell_str = ", ".join(
-                        [
-                            f"{label} = {val:.3f}"
-                            for label, val in zip(
-                                labels, conv_length_and_angles
-                            )
-                        ]
-                    )
-                    warning_str = "\n".join(
-                        [
-                            "----------------------------------------------------------",
-                            "WARNING: The refined cell is different from the input cell",
-                            f"Initial: {init_cell_str}",
-                            f"Refined: {conv_cell_str}",
-                            "Make sure the input miller index is for the refined structure, otherwise set refine_structure=False",
-                            "To turn off this warning set suppress_warnings=True",
-                            "----------------------------------------------------------",
-                            "",
-                        ]
-                    )
-                    print(warning_str)
-
-            conventional_atoms = AseAtomsAdaptor.get_atoms(
-                conventional_structure
-            )
-
-            return (
-                conventional_structure,
-                conventional_atoms,
-            )
-        else:
-            init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
-
-            return init_structure, init_atoms
-
     def _get_surface_generators(self):
-        substrate_generator = SurfaceGenerator(
+        substrate_generator = self.surface_generator(
             bulk=self._substrate_bulk,
             miller_index=self._substrate_miller_index,
             layers=None,
             minimum_thickness=self._minimum_slab_thickness,
-            vacuum=10,
+            vacuum=40.0,
             refine_structure=self._refine_structure,
         )
 
-        film_generator = SurfaceGenerator(
+        film_generator = self.surface_generator(
             bulk=self._film_bulk,
             miller_index=self._film_miller_index,
             layers=None,
             minimum_thickness=self._minimum_slab_thickness,
-            vacuum=10,
+            vacuum=40.0,
             refine_structure=True,
         )
 
         return substrate_generator, film_generator
 
     def _get_most_stable_surface(
-        self, surface_generator: SurfaceGenerator
-    ) -> List[int]:
+        self, surface_generator: BaseSurfaceGenerator
+    ) -> tp.List[int]:
         surface_energies = []
         for surface in surface_generator:
-            surfE_calculator = IonicSurfaceEnergy(
-                oriented_bulk_structure=surface.oriented_bulk_structure,
-                layers=surface.layers,
+            surfE_calculator = self.surface_energy_module(
+                surface=surface,
+                **self.surface_energy_kwargs,
             )
             surface_energies.append(surfE_calculator.get_cleavage_energy())
 
@@ -212,10 +158,9 @@ class IonicInterfaceSearch:
 
     def _get_film_and_substrate_inds(
         self,
-        film_generator: SurfaceGenerator,
-        substrate_generator: SurfaceGenerator,
-        filter_on_charge: bool = True,
-    ) -> List[Tuple[int, int]]:
+        film_generator: BaseSurfaceGenerator,
+        substrate_generator: BaseSurfaceGenerator,
+    ) -> tp.List[tp.Tuple[int, int]]:
         film_and_substrate_inds = []
 
         if self._use_most_stable_substrate:
@@ -230,19 +175,24 @@ class IonicInterfaceSearch:
         for i, film in enumerate(film_generator):
             for j, sub in enumerate(substrate_generator):
                 if j in substrate_inds_to_use:
-                    if filter_on_charge:
-                        sub_sign = np.sign(sub.top_surface_charge)
-                        film_sign = np.sign(film.bottom_surface_charge)
-
-                        if sub_sign == 0.0 or film_sign == 0.0:
-                            film_and_substrate_inds.append((i, j))
-                        else:
-                            if np.sign(sub_sign * film_sign) < 0.0:
-                                film_and_substrate_inds.append((i, j))
-                    else:
-                        film_and_substrate_inds.append((i, j))
+                    film_and_substrate_inds.append((i, j))
 
         return film_and_substrate_inds
+
+    def run_surface_generator_methods(
+        self,
+        film_generator: BaseSurfaceGenerator,
+        substrate_generator: BaseSurfaceGenerator,
+        base_dir: str,
+    ) -> tp.Any:
+        pass
+
+    def run_surface_methods(
+        self,
+        film: BaseSurface,
+        substrate: BaseSurface,
+    ) -> tp.Dict[str, tp.Any]:
+        return {}
 
     def run_interface_search(
         self,
@@ -268,26 +218,23 @@ class IonicInterfaceSearch:
 
         substrate_generator, film_generator = self._get_surface_generators()
 
-        plot_surface_charge_matrix(
-            films=film_generator,
-            substrates=substrate_generator,
-            output=join(base_dir, "surface_charge_matrix.png"),
+        self.run_surface_generator_methods(
+            film_generator=film_generator,
+            substrate_generator=substrate_generator,
+            base_dir=base_dir,
         )
 
         film_and_substrate_inds = self._get_film_and_substrate_inds(
             film_generator=film_generator,
             substrate_generator=substrate_generator,
-            filter_on_charge=filter_on_charge,
         )
 
         print(
             f"Preparing to Optimize {len(film_and_substrate_inds)} {film_comp}({film_miller})/{sub_comp}({sub_miller}) Interfaces..."
         )
 
-        energies = []
-        opt_abz_shifts = []
-        surface_charges = []
-        surface_energies = []
+        data_list = []
+        plotting_data_list = []
 
         for i, film_sub_ind in enumerate(film_and_substrate_inds):
             film_ind = film_sub_ind[0]
@@ -303,9 +250,10 @@ class IonicInterfaceSearch:
             film = film_generator[film_ind]
             sub = substrate_generator[sub_ind]
 
-            film_surface_charge = film.bottom_surface_charge
-            sub_surface_charge = sub.top_surface_charge
-            surface_charges.append([film_surface_charge, sub_surface_charge])
+            surface_specific_props = self.run_surface_methods(
+                substrate=sub,
+                film=film,
+            )
 
             film.write_file(join(interface_dir, f"POSCAR_film_{film_ind:02d}"))
             sub.write_file(join(interface_dir, f"POSCAR_sub_{sub_ind:02d}"))
@@ -317,7 +265,7 @@ class IonicInterfaceSearch:
                 max_area_mismatch=self._max_area_mismatch,
                 max_area=self._max_area,
                 interfacial_distance=2.0,
-                vacuum=60,
+                vacuum=60.0,
                 center=True,
                 substrate_strain_fraction=self._substrate_strain_fraction,
             )
@@ -331,36 +279,37 @@ class IonicInterfaceSearch:
                     output=join(base_dir, "interface_view.png")
                 )
 
-            intE_matcher = IonicSurfaceMatcher(
+            surface_matcher = self.surface_matching_module(
                 interface=interface,
-                auto_determine_born_n=self._auto_determine_born_n,
-                born_n=self._born_n,
                 grid_density=self._grid_density_PES,
+                **self.surface_matching_kwargs,
             )
 
             if self._z_bounds_PSO is None:
                 min_z = 0.5
-                max_z = 1.1 * intE_matcher._max_z
+                max_z = 1.1 * surface_matcher._get_max_z()
             else:
                 min_z = self._z_bounds_PSO[0]
                 max_z = self._z_bounds_PSO[1]
 
-            _ = intE_matcher.optimizePSO(
+            _ = surface_matcher.optimizePSO(
                 z_bounds=self._z_bounds_PSO,
                 max_iters=self._max_iterations_PSO,
                 n_particles=self._n_particles_PSO,
             )
-            intE_matcher.get_optimized_structure()
+            surface_matcher.get_optimized_structure()
+
             opt_d_pso = interface.interfacial_distance
 
-            intE_matcher.run_surface_matching(
+            surface_matcher.run_surface_matching(
                 output=join(interface_dir, "PES_opt.png"),
                 fontsize=14,
                 cmap=self._cmap_PES,
             )
-            intE_matcher.get_optimized_structure()
 
-            intE_matcher.run_z_shift(
+            surface_matcher.get_optimized_structure()
+
+            surface_matcher.run_z_shift(
                 interfacial_distances=np.linspace(
                     max(min_z, opt_d_pso - 2.0),
                     min(opt_d_pso + 2.0, max_z),
@@ -368,7 +317,8 @@ class IonicInterfaceSearch:
                 ),
                 output=join(interface_dir, "z_shift.png"),
             )
-            intE_matcher.get_optimized_structure()
+
+            surface_matcher.get_optimized_structure()
 
             interface.write_file(
                 join(
@@ -381,52 +331,70 @@ class IonicInterfaceSearch:
             a_shift = np.mod(interface._a_shift, 1.0)
             b_shift = np.mod(interface._b_shift, 1.0)
 
-            opt_abz_shifts.append([a_shift, b_shift, opt_d])
+            adh_energy, int_energy = surface_matcher.get_current_energy()
+            film_surface_energy = surface_matcher.film_surface_energy
+            sub_surface_energy = surface_matcher.sub_surface_energy
 
-            adh_energy, int_energy = intE_matcher.get_current_energy()
-            film_surface_energy = intE_matcher.film_surface_energy
-            sub_surface_energy = intE_matcher.sub_surface_energy
-            surface_energies.append([film_surface_energy, sub_surface_energy])
+            interface_structure = interface.get_interface(orthogonal=True)
 
-            energies.append([int_energy, adh_energy])
+            plotting_data = {
+                "filmIndex": int(film_ind),
+                "substrateIndex": int(sub_ind),
+                "interfaceEnergy": float(int_energy),
+                "adhesionEnergy": float(adh_energy),
+                "aShift": float(a_shift),
+                "bShift": float(b_shift),
+                "interfacialDistance": float(opt_d),
+                "filmSurfaceEnergy": float(film_surface_energy),
+                "substrateSurfaceEnergy": float(sub_surface_energy),
+            }
+            plotting_data_list.append(plotting_data)
+
+            iter_data = {
+                "pesFigurePath": abspath(join(interface_dir, "PES_opt.png")),
+                "zShiftFigurePath": abspath(
+                    join(interface_dir, "z_shift.png")
+                ),
+                "interfaceStructure": interface_structure.as_dict(),
+            }
+            iter_data.update(surface_specific_props)
+            iter_data.update(plotting_data)
+
+            data_list.append(iter_data)
             print("")
 
-        energies = np.array(energies)
-        opt_abz_shifts = np.array(opt_abz_shifts)
-        film_sub_inds = np.array(film_and_substrate_inds)
-        surface_charges = np.round(np.array(surface_charges), 4)
-        surface_energies = np.array(surface_energies)
-
-        data = {
-            "Film Index": film_sub_inds[:, 0].astype(int),
-            "Substrate Index": film_sub_inds[:, 1].astype(int),
-            "a Shift": opt_abz_shifts[:, 0],
-            "b Shift": opt_abz_shifts[:, 1],
-            "Interfacial Distance": opt_abz_shifts[:, 2],
-            "Film Surface Charge": surface_charges[:, 0],
-            "Substrate Surface Charge": surface_charges[:, 1],
-            "Score Film Surface Energy": surface_energies[:, 0],
-            "Score Substrate Surface Energy": surface_energies[:, 1],
-            "Score Interface Energy": energies[:, 0],
-            "Score Adhesion Energy": energies[:, 1],
+        run_data = {
+            "substrateBulk": self._substrate_bulk.as_dict(),
+            "filmBulk": self._film_bulk.as_dict(),
+            "filmMillerIndex": list(self._film_miller_index),
+            "substrateMillerIndex": list(self._substrate_miller_index),
+            "maxStrain": float(self._max_strain),
+            "maxArea": self._max_area and float(self._max_area),
+            "maxAreaMismatch": self._max_area_mismatch
+            and float(self._max_area_mismatch),
+            "optData": data_list,
         }
 
-        df = pd.DataFrame(data=data)
+        with open(join(base_dir, "run_data.json"), "w") as f:
+            json_str = json.dumps(run_data, indent=4, sort_keys=True)
+            f.write(json_str)
+
+        df = pd.DataFrame(data=plotting_data_list)
         df.to_csv(join(base_dir, "opt_data.csv"), index=False)
 
         x_label_key = "(Film Index, Substrate Index)"
         df[x_label_key] = [
-            f"({int(row['Film Index'])},{int(row['Substrate Index'])})"
+            f"({int(row['filmIndex'])},{int(row['substrateIndex'])})"
             for i, row in df.iterrows()
         ]
 
         intE_key = "Interface Energy (eV/${\\AA}^{2}$)"
-        intE_df = df[[x_label_key, "Score Interface Energy"]].copy()
+        intE_df = df[[x_label_key, "interfaceEnergy"]].copy()
         intE_df.columns = [x_label_key, intE_key]
         intE_df.sort_values(by=intE_key, inplace=True)
 
         adhE_key = "Adhesion Energy (eV/${\\AA}^{2}$)"
-        adhE_df = df[[x_label_key, "Score Adhesion Energy"]].copy()
+        adhE_df = df[[x_label_key, "adhesionEnergy"]].copy()
         adhE_df.columns = [x_label_key, adhE_key]
         adhE_df.sort_values(by=adhE_key, inplace=True)
 

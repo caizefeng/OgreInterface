@@ -1,1 +1,0 @@
-from OgreInterface.workflows.interface_search import IonicInterfaceSearch

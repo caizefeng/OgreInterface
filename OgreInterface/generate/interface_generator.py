@@ -90,6 +90,7 @@ class InterfaceGenerator:
         max_strain: float = 0.01,
         max_area_mismatch: Optional[float] = None,
         max_area: Optional[float] = None,
+        max_area_scale_factor: float = 4.1,
         interfacial_distance: Optional[float] = 2.0,
         vacuum: float = 40.0,
         center: bool = False,
@@ -117,6 +118,7 @@ class InterfaceGenerator:
         self.max_area_mismatch = max_area_mismatch
         self.max_strain = max_strain
         self.max_area = max_area
+        self.max_area_scale_factor = max_area_scale_factor
         self.interfacial_distance = interfacial_distance
         self.vacuum = vacuum
         self._substrate_point_group_operations = (
@@ -148,6 +150,7 @@ class InterfaceGenerator:
             max_area=self.max_area,
             max_strain=self.max_strain,
             max_area_mismatch=self.max_area_mismatch,
+            max_area_scale_factor=self.max_area_scale_factor,
         )
         match_list = zm.run(return_all=True)
 

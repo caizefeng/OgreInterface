@@ -90,7 +90,7 @@ def plot_surface_charge_matrix(
 
     film_surface_charges = [film.bottom_surface_charge for film in films]
     substrate_surface_charges = [
-        substrate.bottom_surface_charge for substrate in substrates
+        substrate.top_surface_charge for substrate in substrates
     ]
 
     x_size = 4
@@ -265,3 +265,4 @@ def plot_surface_charge_matrix(
         bbox_inches="tight",
         transparent=False,
     )
+    plt.close(fig)

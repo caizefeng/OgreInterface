@@ -67,6 +67,7 @@ class MillerSearch(object):
         max_strain: float = 0.01,
         max_area_mismatch: Optional[float] = None,
         max_area: Optional[float] = None,
+        max_area_scale_factor: float = 4.1,
         refine_structure: bool = True,
         suppress_warnings: bool = False,
         custom_film_miller_indices: Optional[List[List[int]]] = None,
@@ -110,6 +111,7 @@ class MillerSearch(object):
         self.max_area_mismatch = max_area_mismatch
         self.max_strain = max_strain
         self.max_area = max_area
+        self.max_area_scale_factor = max_area_scale_factor
 
         if custom_substrate_miller_indices is not None:
             self.substrate_inds = custom_substrate_miller_indices
@@ -175,6 +177,7 @@ class MillerSearch(object):
                     max_area=self.max_area,
                     max_strain=self.max_strain,
                     max_area_mismatch=self.max_area_mismatch,
+                    max_area_scale_factor=self.max_area_scale_factor,
                 )
                 matches = zm.run()
 

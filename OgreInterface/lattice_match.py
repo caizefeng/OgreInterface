@@ -74,6 +74,7 @@ class ZurMcGill:
         max_area: Optional[float] = None,
         max_strain: float = 0.01,
         max_area_mismatch: Optional[float] = None,
+        max_area_scale_factor: float = 4.1,
     ) -> None:
         self.film_vectors = film_vectors
         self.film_basis = film_basis
@@ -90,7 +91,9 @@ class ZurMcGill:
         self.substrate_area = self._get_area(self.substrate_vectors)
 
         if max_area is None:
-            self.max_area = 4.1 * max(self.film_area, self.substrate_area)
+            self.max_area = max_area_scale_factor * max(
+                self.film_area, self.substrate_area
+            )
         else:
             self.max_area = max_area
 
