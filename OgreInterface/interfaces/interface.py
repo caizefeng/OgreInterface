@@ -1,4 +1,5 @@
 import typing as tp
+import itertools
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.periodic_table import Element
@@ -34,88 +35,6 @@ class Interface(BaseInterface):
             center=center,
             substrate_strain_fraction=substrate_strain_fraction,
         )
-
-    def get_interface(
-        self,
-        orthogonal: bool = True,
-        return_atoms: bool = False,
-    ) -> tp.Union[Atoms, Structure]:
-        """
-        This is a simple function for easier access to the interface structure generated from the OgreMatch
-
-        Args:
-            orthogonal: Determines if the orthogonalized structure is returned
-            return_atoms: Determines if the ASE Atoms object is returned instead of a Pymatgen Structure object (default)
-
-        Returns:
-            Either a Pymatgen Structure of ASE Atoms object of the interface structure
-        """
-        if orthogonal:
-            if return_atoms:
-                return utils.get_atoms(self._orthogonal_structure)
-            else:
-                return self._orthogonal_structure
-        else:
-            if return_atoms:
-                return utils.get_atoms(self._non_orthogonal_structure)
-            else:
-                return self._non_orthogonal_structure
-
-    def get_substrate_supercell(
-        self,
-        orthogonal: bool = True,
-        return_atoms: bool = False,
-    ) -> tp.Union[Atoms, Structure]:
-        """
-        This is a simple function for easier access to the substrate supercell generated from the OgreMatch
-        (i.e. the interface structure with the film atoms removed)
-
-        Args:
-            orthogonal: Determines if the orthogonalized structure is returned
-            return_atoms: Determines if the ASE Atoms object is returned instead of a Pymatgen Structure object (default)
-
-        Returns:
-            Either a Pymatgen Structure of ASE Atoms object of the substrate supercell structure
-        """
-        if orthogonal:
-            if return_atoms:
-                return utils.get_atoms(self._orthogonal_substrate_structure)
-            else:
-                return self._orthogonal_substrate_structure
-        else:
-            if return_atoms:
-                return utils.get_atoms(
-                    self._non_orthogonal_substrate_structure
-                )
-            else:
-                return self._non_orthogonal_substrate_structure
-
-    def get_film_supercell(
-        self,
-        orthogonal: bool = True,
-        return_atoms: bool = False,
-    ) -> tp.Union[Atoms, Structure]:
-        """
-        This is a simple function for easier access to the film supercell generated from the OgreMatch
-        (i.e. the interface structure with the substrate atoms removed)
-
-        Args:
-            orthogonal: Determines if the orthogonalized structure is returned
-            return_atoms: Determines if the ASE Atoms object is returned instead of a Pymatgen Structure object (default)
-
-        Returns:
-            Either a Pymatgen Structure of ASE Atoms object of the film supercell structure
-        """
-        if orthogonal:
-            if return_atoms:
-                return utils.get_atoms(self._orthogonal_film_structure)
-            else:
-                return self._orthogonal_film_structure
-        else:
-            if return_atoms:
-                return utils.get_atoms(self._non_orthogonal_film_structure)
-            else:
-                return self._non_orthogonal_film_structure
 
     def replace_species(
         self, site_index: int, species_mapping: tp.Dict[str, str]
@@ -417,18 +336,17 @@ class Interface(BaseInterface):
             relax_z_only: Determines if the relaxation is in the z-direction only
         """
         if orthogonal:
-            slab = self._orthogonal_structure
+            slab = utils.return_structure(
+                structure=self._orthogonal_structure,
+                convert_to_atoms=False,
+            )
         else:
-            slab = self._non_orthogonal_structure
+            slab = utils.return_structure(
+                structure=self._non_orthogonal_structure,
+                convert_to_atoms=False,
+            )
 
-        comment = "|".join(
-            [
-                f"L={self.film.layers},{self.substrate.layers}",
-                f"T={self.film.termination_index},{self.substrate.termination_index}",
-                f"O={int(orthogonal)}",
-                f"d={self.interfacial_distance:.3f}",
-            ]
-        )
+        comment = self._get_base_poscar_comment_str(orthogonal=orthogonal)
 
         if relax:
             comment += "|" + "|".join(
@@ -509,7 +427,9 @@ class Interface(BaseInterface):
                 else:
                     syms.append(site.specie.symbol)
 
-            comp_list = [(a[0], len(list(a[1]))) for a in groupby(syms)]
+            comp_list = [
+                (a[0], len(list(a[1]))) for a in itertools.groupby(syms)
+            ]
             atom_types, n_atoms = zip(*comp_list)
 
             new_atom_types = []

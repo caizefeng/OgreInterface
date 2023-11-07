@@ -95,7 +95,10 @@ class OrientedBulk(Sequence):
         lattice vectors are in the xy-plane with the a-vector pointing
         along the [1, 0, 0] cartesian direction.
         """
-        return self._oriented_bulk_structure
+        return utils.return_structure(
+            structure=self._oriented_bulk_structure,
+            convert_to_atoms=False,
+        )
 
     @property
     def crystallographic_basis(self) -> np.ndarray:

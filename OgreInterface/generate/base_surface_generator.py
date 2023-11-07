@@ -272,12 +272,12 @@ class BaseSurfaceGenerator(Sequence):
         slab_base.round(tol=6)
 
         # Get the fractional c-coords
-        c_coords = slab_base.oriented_bulk_structure.frac_coords[:, -1]
+        c_coords = slab_base._oriented_bulk_structure.frac_coords[:, -1]
 
         # Calculate the shifts again on the shifted structure to get the upper
         # and lower bounds of where an atomic layer should be.
         shifts = self._calculate_possible_shifts(
-            structure=slab_base.oriented_bulk_structure,
+            structure=slab_base._oriented_bulk_structure,
         )
         shifts += [1.0]
 
@@ -366,7 +366,7 @@ class BaseSurfaceGenerator(Sequence):
 
         # Create the non-orthogonalized surface
         non_orthogonal_slab = utils.get_layer_supercell(
-            structure=slab_base.oriented_bulk_structure,
+            structure=slab_base._oriented_bulk_structure,
             layers=self.layers,
             vacuum_scale=vacuum_scale,
         )
@@ -400,7 +400,7 @@ class BaseSurfaceGenerator(Sequence):
         # Determine if all possible terminations are generated
         slab_base = self._get_slab_base()
         possible_shifts = self._calculate_possible_shifts(
-            structure=slab_base.oriented_bulk_structure
+            structure=slab_base._oriented_bulk_structure
         )
         shifted_slab_bases = []
         non_orthogonal_slabs = []

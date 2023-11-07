@@ -64,10 +64,16 @@ class BaseInterface(ABC):
     def __init__(
         self,
         substrate: tp.Union[
-            Surface, MolecularSurface, Interface, MolecularInterface
+            Surface,
+            MolecularSurface,
+            Interface,
+            MolecularInterface,
         ],
         film: tp.Union[
-            Surface, MolecularSurface, Interface, MolecularInterface
+            Surface,
+            MolecularSurface,
+            Interface,
+            MolecularInterface,
         ],
         match: OgreMatch,
         interfacial_distance: float,
@@ -169,7 +175,10 @@ class BaseInterface(ABC):
 
     @property
     def oriented_bulk_structure(self) -> Structure:
-        return self.substrate.oriented_bulk_structure
+        return utils.return_structure(
+            structure=self.substrate.oriented_bulk_structure,
+            convert_to_atoms=False,
+        )
 
     @property
     def substrate_oriented_bulk_supercell(self) -> Structure:
@@ -179,10 +188,10 @@ class BaseInterface(ABC):
                 strain_matrix=self._substrate_strain_matrix,
             )
 
-            if "molecules" in obs_supercell.site_properties:
-                utils.add_molecules(obs_supercell)
-
-            return obs_supercell
+            return utils.return_structure(
+                structure=obs_supercell,
+                convert_to_atoms=False,
+            )
         else:
             raise "substrate_oriented_bulk_supercell is not applicable when an Interface is used as the substrate"
 
@@ -194,10 +203,10 @@ class BaseInterface(ABC):
                 strain_matrix=self._film_strain_matrix,
             )
 
-            if "molecules" in obs_supercell.site_properties:
-                utils.add_molecules(obs_supercell)
-
-            return obs_supercell
+            return utils.return_structure(
+                structure=obs_supercell,
+                convert_to_atoms=False,
+            )
         else:
             raise "film_oriented_bulk_supercell is not applicable when an Interface is used as the film"
 
@@ -214,10 +223,10 @@ class BaseInterface(ABC):
                 transform=self._substrate_a_to_i,
             )
 
-            if "molecules" in obs_structure.site_properties:
-                utils.add_molecules(obs_structure)
-
-            return obs_structure
+            return utils.return_structure(
+                structure=obs_structure,
+                convert_to_atoms=False,
+            )
         else:
             raise "substrate_oriented_bulk_structure is not applicable when an Interface is used as the substrate"
 
@@ -234,10 +243,10 @@ class BaseInterface(ABC):
                 transform=self._film_a_to_i,
             )
 
-            if "molecules" in obs_structure.site_properties:
-                utils.add_molecules(obs_structure)
-
-            return obs_structure
+            return utils.return_structure(
+                structure=obs_structure,
+                convert_to_atoms=False,
+            )
         else:
             raise "film_oriented_bulk_structure is not applicable when an Interface is used as the film"
 
@@ -303,21 +312,85 @@ class BaseInterface(ABC):
 
         return (sub_z_coords.min() + film_z_coords.max()) / 2
 
-    @abstractmethod
-    def get_interface(self, *args, **kwargs) -> tp.Union[Atoms, Structure]:
-        pass
+    def get_interface(
+        self,
+        orthogonal: bool = True,
+        return_atoms: bool = False,
+    ) -> tp.Union[Atoms, Structure]:
+        """
+        This is a simple function for easier access to the interface structure generated from the OgreMatch
 
-    @abstractmethod
+        Args:
+            orthogonal: Determines if the orthogonalized structure is returned
+            return_atoms: Determines if the ASE Atoms object is returned instead of a Pymatgen Structure object (default)
+
+        Returns:
+            Either a Pymatgen Structure of ASE Atoms object of the interface structure
+        """
+        if orthogonal:
+            return utils.return_structure(
+                structure=self._orthogonal_structure,
+                convert_to_atoms=return_atoms,
+            )
+        else:
+            return utils.return_structure(
+                structure=self._non_orthogonal_structure,
+                convert_to_atoms=return_atoms,
+            )
+
     def get_substrate_supercell(
-        self, *args, **kwargs
+        self,
+        orthogonal: bool = True,
+        return_atoms: bool = False,
     ) -> tp.Union[Atoms, Structure]:
-        pass
+        """
+        This is a simple function for easier access to the substrate supercell generated from the OgreMatch
+        (i.e. the interface structure with the film atoms removed)
 
-    @abstractmethod
+        Args:
+            orthogonal: Determines if the orthogonalized structure is returned
+            return_atoms: Determines if the ASE Atoms object is returned instead of a Pymatgen Structure object (default)
+
+        Returns:
+            Either a Pymatgen Structure of ASE Atoms object of the substrate supercell structure
+        """
+        if orthogonal:
+            return utils.return_structure(
+                structure=self._orthogonal_substrate_structure,
+                convert_to_atoms=return_atoms,
+            )
+        else:
+            return utils.return_structure(
+                structure=self._non_orthogonal_substrate_structure,
+                convert_to_atoms=return_atoms,
+            )
+
     def get_film_supercell(
-        self, *args, **kwargs
+        self,
+        orthogonal: bool = True,
+        return_atoms: bool = False,
     ) -> tp.Union[Atoms, Structure]:
-        pass
+        """
+        This is a simple function for easier access to the film supercell generated from the OgreMatch
+        (i.e. the interface structure with the substrate atoms removed)
+
+        Args:
+            orthogonal: Determines if the orthogonalized structure is returned
+            return_atoms: Determines if the ASE Atoms object is returned instead of a Pymatgen Structure object (default)
+
+        Returns:
+            Either a Pymatgen Structure of ASE Atoms object of the film supercell structure
+        """
+        if orthogonal:
+            return utils.return_structure(
+                structure=self._orthogonal_film_structure,
+                convert_to_atoms=return_atoms,
+            )
+        else:
+            return utils.return_structure(
+                structure=self._non_orthogonal_film_structure,
+                convert_to_atoms=return_atoms,
+            )
 
     def get_substrate_layer_indices(
         self,
@@ -1246,3 +1319,15 @@ class BaseInterface(ABC):
             output=output,
             show_in_colab=show_in_colab,
         )
+
+    def _get_base_poscar_comment_str(self, orthogonal: bool):
+        comment = "|".join(
+            [
+                f"L={self.film.layers},{self.substrate.layers}",
+                f"T={self.film.termination_index},{self.substrate.termination_index}",
+                f"O={int(orthogonal)}",
+                f"d={self.interfacial_distance:.3f}",
+            ]
+        )
+
+        return comment

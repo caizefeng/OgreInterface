@@ -2,25 +2,18 @@
 This module will be used to construct the surfaces and interfaces used in this package.
 """
 from typing import Dict, Union, Iterable, List, Tuple, TypeVar
-from itertools import combinations, groupby
-from copy import deepcopy
-from functools import reduce
+import itertools
 import warnings
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
-from pymatgen.core.periodic_table import Element, Species
+from pymatgen.core.periodic_table import Species
 from pymatgen.io.vasp.inputs import Poscar
-from pymatgen.io.ase import AseAtomsAdaptor
-from pymatgen.symmetry.analyzer import SymmOp, SpacegroupAnalyzer
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
-from pymatgen.analysis.local_env import CrystalNN, BrunnerNN_real
+from pymatgen.analysis.local_env import CrystalNN
 import numpy as np
-from ase import Atoms
 
 from OgreInterface import utils
-from OgreInterface.lattice_match import OgreMatch
-from OgreInterface.plotting_tools import plot_match
 from OgreInterface.surfaces.oriented_bulk import OrientedBulk
 from OgreInterface.surfaces.base_surface import BaseSurface
 
@@ -146,6 +139,104 @@ class Surface(BaseSurface):
         z_frac = mod_frac_coords
 
         return np.round((charges * z_frac).sum(), 4)
+
+    def write_file(
+        self,
+        output: str = "POSCAR_slab",
+        orthogonal: bool = True,
+        relax: bool = False,
+    ) -> None:
+        """
+        Writes a POSCAR file of the surface with important information about the slab such as the number of layers, the termination index, and pseudo-hydrogen charges
+
+        Examples:
+            Writing a POSCAR file for a static DFT calculation:
+            >>> surface.write_file(output="POSCAR", orthogonal=True, relax=False)
+
+            Writing a passivated POSCAR file that needs to be relaxed using DFT:
+            >>> surface.write_file(output="POSCAR", orthogonal=True, relax=True)
+
+
+        Args:
+            orthogonal: Determines the the output slab is forced to have a c-vector that is orthogonal to the a and b lattice vectors
+            output: File path of the POSCAR
+            relax: Determines if selective dynamics should be set in the POSCAR
+        """
+        if orthogonal:
+            slab = utils.return_structure(
+                structure=self._orthogonal_slab_structure,
+                convert_to_atoms=False,
+            )
+        else:
+            slab = utils.return_structure(
+                structure=self._non_orthogonal_slab_structure,
+                convert_to_atoms=False,
+            )
+
+        comment = self._get_base_poscar_comment_str(orthogonal=orthogonal)
+
+        if not self._passivated:
+            poscar_str = Poscar(slab, comment=comment).get_string()
+        else:
+            if relax:
+                atomic_numbers = np.array(slab.atomic_numbers)
+                selective_dynamics = np.repeat(
+                    (atomic_numbers == 1).reshape(-1, 1),
+                    repeats=3,
+                    axis=1,
+                )
+            else:
+                selective_dynamics = None
+
+            syms = [site.specie.symbol for site in slab]
+
+            syms = []
+            for site in slab:
+                if site.specie.symbol == "H":
+                    if hasattr(site.specie, "oxi_state"):
+                        oxi = site.specie.oxi_state
+
+                        if oxi < 1.0 and oxi != 0.5:
+                            H_str = "H" + f"{oxi:.2f}"[1:]
+                        elif oxi == 0.5:
+                            H_str = "H.5"
+                        elif oxi > 1.0 and oxi != 1.5:
+                            H_str = "H" + f"{oxi:.2f}"
+                        elif oxi == 1.5:
+                            H_str = "H1.5"
+                        else:
+                            H_str = "H"
+
+                        syms.append(H_str)
+                else:
+                    syms.append(site.specie.symbol)
+
+            comp_list = [
+                (a[0], len(list(a[1]))) for a in itertools.groupby(syms)
+            ]
+            atom_types, n_atoms = zip(*comp_list)
+
+            new_atom_types = []
+            for atom in atom_types:
+                if "H" == atom[0] and atom not in ["Hf", "Hs", "Hg", "He"]:
+                    new_atom_types.append("H")
+                else:
+                    new_atom_types.append(atom)
+
+            comment += "|potcar=" + " ".join(atom_types)
+
+            poscar = Poscar(slab, comment=comment)
+
+            if relax:
+                poscar.selective_dynamics = selective_dynamics
+
+            poscar_str = poscar.get_string().split("\n")
+            poscar_str[5] = " ".join(new_atom_types)
+            poscar_str[6] = " ".join(list(map(str, n_atoms)))
+            poscar_str = "\n".join(poscar_str)
+
+        with open(output, "w") as f:
+            f.write(poscar_str)
 
     def _get_surface_atoms(self, cutoff: float) -> Tuple[Structure, List]:
         obs = self.oriented_bulk_structure.copy()

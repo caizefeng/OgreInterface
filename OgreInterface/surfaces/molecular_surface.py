@@ -115,3 +115,39 @@ class MolecularSurface(BaseSurface):
             vacuum=vacuum,
             termination_index=termination_index,
         )
+
+    def write_file(
+        self,
+        output: str = "POSCAR_slab",
+        orthogonal: bool = True,
+    ) -> None:
+        """
+        Writes a POSCAR file of the surface with important information about the slab such as the number of layers, the termination index, and pseudo-hydrogen charges
+
+        Examples:
+            Writing a POSCAR file for a static DFT calculation:
+            >>> surface.write_file(output="POSCAR", orthogonal=True, relax=False)
+
+            Writing a passivated POSCAR file that needs to be relaxed using DFT:
+            >>> surface.write_file(output="POSCAR", orthogonal=True, relax=True)
+
+
+        Args:
+            orthogonal: Determines the the output slab is forced to have a c-vector that is orthogonal to the a and b lattice vectors
+            output: File path of the POSCAR
+        """
+        if orthogonal:
+            slab = utils.return_structure(
+                structure=self._orthogonal_slab_structure,
+                convert_to_atoms=False,
+            )
+        else:
+            slab = utils.return_structure(
+                structure=self._non_orthogonal_slab_structure,
+                convert_to_atoms=False,
+            )
+
+        comment = self._get_base_poscar_comment_str(orthogonal=orthogonal)
+
+        poscar = Poscar(slab, comment=comment)
+        poscar.write_file(output)

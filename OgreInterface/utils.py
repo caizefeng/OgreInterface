@@ -657,16 +657,29 @@ def replace_molecules_with_atoms(s: Structure) -> Structure:
     return dummy_struc
 
 
-def add_molecules(struc: Structure) -> Structure:
+def return_structure(
+    structure: Structure,
+    convert_to_atoms: bool = False,
+) -> tp.Union[Structure, Atoms]:
+    if "molecules" in structure.site_properties:
+        structure = add_molecules(structure=structure)
+
+    if convert_to_atoms:
+        return get_atoms(structure)
+    else:
+        return structure
+
+
+def add_molecules(structure: Structure) -> Structure:
     mol_coords = []
     mol_atom_nums = []
 
-    properties = list(struc.site_properties.keys())
+    properties = list(structure.site_properties.keys())
     properties.remove("molecules")
     site_props = {p: [] for p in properties}
     site_props["molecule_index"] = []
 
-    for i, site in enumerate(struc):
+    for i, site in enumerate(structure):
         site_mol = site.properties["molecules"]
         mol_coords.append(site_mol.cart_coords + site.coords)
         mol_atom_nums.extend(site_mol.atomic_numbers)
@@ -677,7 +690,7 @@ def add_molecules(struc: Structure) -> Structure:
             site_props[p].extend([site.properties[p]] * len(site_mol))
 
     mol_layer_struc = Structure(
-        lattice=struc.lattice,
+        lattice=structure.lattice,
         species=mol_atom_nums,
         coords=np.vstack(mol_coords),
         to_unit_cell=True,

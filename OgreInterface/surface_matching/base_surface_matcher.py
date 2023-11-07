@@ -935,7 +935,6 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
 
         total_energies = []
         for batch_shift in batch_shifts:
-            print(batch_shift.shape)
             batch_inputs = self.generate_interface_inputs(
                 shifts=batch_shift,
             )
