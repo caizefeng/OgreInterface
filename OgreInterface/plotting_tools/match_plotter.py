@@ -14,6 +14,7 @@ def plot_match(
     film_color: str = "green",
     output: str = "interface_view.png",
     show_in_colab: bool = False,
+    dpi: int = 400,
 ):
     strain_matrix = match.film_to_substrate_strain_transform[:2, :2]
     film_align_matrix = match.film_align_transform[:2, :2]
@@ -75,8 +76,7 @@ def plot_match(
         ACC
         BCC
     """
-    fig, axs = plt.subplot_mosaic(mosaic=mosaic, figsize=(6, 4), dpi=400)
-    # fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
+    fig, axs = plt.subplot_mosaic(mosaic=mosaic, figsize=(6, 4), dpi=dpi)
     for k in axs:
         axs[k].axis("off")
         axs[k].set_aspect("equal")
