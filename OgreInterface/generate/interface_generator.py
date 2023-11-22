@@ -6,6 +6,7 @@ from typing import Union, List, TypeVar, Tuple, Dict, Optional
 from itertools import combinations, product, groupby
 from collections.abc import Sequence
 import math
+import logging
 
 
 from pymatgen.core.structure import Structure
@@ -95,6 +96,7 @@ class InterfaceGenerator:
         vacuum: float = 40.0,
         center: bool = False,
         substrate_strain_fraction: float = 0.0,
+        verbose: bool = True,
     ):
         if (
             issubclass(type(substrate), BaseSurface)
@@ -113,6 +115,7 @@ class InterfaceGenerator:
                 f"InterfaceGenerator accepts 'ogre.core.Surface' or 'ogre.core.Interface' not '{type(film).__name__}'"
             )
 
+        self._verbose = verbose
         self.center = center
         self._substrate_strain_fraction = substrate_strain_fraction
         self.max_area_mismatch = max_area_mismatch
@@ -323,15 +326,21 @@ class InterfaceGenerator:
         )
         return interface
 
-    def generate_interfaces(self):
+    def generate_interfaces(self, generate_all: bool = True):
         """Generates a list of Interface objects from that matches found using the Zur and McGill lattice matching algorithm"""
         interfaces = []
 
-        print(
-            f"Generating Interfaces for {self.film.formula_with_miller}[{self.film.termination_index}] and {self.substrate.formula_with_miller}[{self.substrate.termination_index}]:"
-        )
-        for match in tqdm(self.match_list, dynamic_ncols=True):
-            interface = self._build_interface(match=match)
+        if self._verbose:
+            print(
+                f"Generating Interfaces for {self.film.formula_with_miller}[{self.film.termination_index}] and {self.substrate.formula_with_miller}[{self.substrate.termination_index}]:"
+            )
+
+        if generate_all:
+            for match in tqdm(self.match_list, dynamic_ncols=True):
+                interface = self._build_interface(match=match)
+                interfaces.append(interface)
+        else:
+            interface = self._build_interface(match=self.match_list[0])
             interfaces.append(interface)
 
         return interfaces

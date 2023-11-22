@@ -60,7 +60,7 @@ def _tqdm_run(self, max_iter=None, precision=None, N=20):
     return self.best_x, self.best_y
 
 
-PSO.run = _tqdm_run
+# PSO.run = _tqdm_run
 
 
 class PostInitCaller(type):
@@ -90,7 +90,13 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
         self,
         interface: BaseInterface,
         grid_density: float = 2.5,
+        verbose: bool = True,
     ):
+        self._verbose = verbose
+
+        if self._verbose:
+            PSO.run = _tqdm_run
+
         # Interface or Molecular Interface Object
         self.interface = interface
 
@@ -322,26 +328,31 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
 
         return 2 * max_covalent_radius
 
-    def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 25):
-        set_run_mode(func, mode="vectorization")
-        print("Running 3D Surface Matching with Particle Swarm Optimization:")
-        optimizer = PSO(
-            func=func,
-            pop=n_particles,
-            max_iter=max_iters,
-            lb=[0.0, 0.0, z_bounds[0]],
-            ub=[1.0, 1.0, z_bounds[1]],
-            w=0.9,
-            c1=0.5,
-            c2=0.3,
-            verbose=False,
-            dim=3,
-        )
-        optimizer.run()
-        cost = optimizer.gbest_y
-        pos = optimizer.gbest_x
+    # def _optimizerPSO(self, func, z_bounds, max_iters, n_particles: int = 25):
+    #     set_run_mode(func, mode="vectorization")
 
-        return cost, pos
+    #     if self._verbose:
+    #         print(
+    #             "Running 3D Surface Matching with Particle Swarm Optimization:"
+    #         )
+
+    #     optimizer = PSO(
+    #         func=func,
+    #         pop=n_particles,
+    #         max_iter=max_iters,
+    #         lb=[0.0, 0.0, z_bounds[0]],
+    #         ub=[1.0, 1.0, z_bounds[1]],
+    #         w=0.9,
+    #         c1=0.5,
+    #         c2=0.3,
+    #         verbose=False,
+    #         dim=3,
+    #     )
+    #     optimizer.run()
+    #     cost = optimizer.gbest_y
+    #     pos = optimizer.gbest_x
+
+    #     return cost, pos
 
     def _get_shift_matrix(self) -> np.ndarray:
         if self.interface.substrate.area < self.interface.film.area:
@@ -908,8 +919,8 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
     def run_z_shift(
         self,
         interfacial_distances: np.ndarray,
-        figsize: tuple = (4, 3),
-        fontsize: int = 12,
+        figsize: tuple = (5, 5),
+        fontsize: int = 14,
         output: str = "z_shift.png",
         dpi: int = 400,
         save_raw_data_file=None,
@@ -1089,7 +1100,11 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
             max_z = self._get_max_z()
             z_bounds = [0.5, max(3.5, 1.2 * max_z)]
 
-        print("Running 3D Surface Matching with Particle Swarm Optimization:")
+        if self._verbose:
+            print(
+                "Running 3D Surface Matching with Particle Swarm Optimization:"
+            )
+
         optimizer = PSO(
             func=self._PSO_function,
             pop=n_particles,

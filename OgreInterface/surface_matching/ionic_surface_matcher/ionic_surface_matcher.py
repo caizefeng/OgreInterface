@@ -12,15 +12,12 @@ from OgreInterface.surface_matching.ionic_surface_matcher import (
     IonicShiftedForcePotential,
     ionic_utils,
 )
+
 from OgreInterface.surface_matching import (
     IonicSurfaceEnergy,
     BaseSurfaceMatcher,
 )
 
-# from OgreInterface.surface_matching.ionic_surface_matcher.ionic_shifted_force_potential import (
-#     IonicShiftedForcePotential,
-# )
-# import OgreInterface.surface_matching.ionic_surface_matcher.utils as ionic_utils
 from OgreInterface.interfaces import Interface
 
 
@@ -52,6 +49,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         self,
         interface: Interface,
         grid_density: float = 2.5,
+        verbose: bool = True,
         auto_determine_born_n: bool = False,
         born_n: float = 12.0,
     ):
@@ -61,6 +59,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         super().__init__(
             interface=interface,
             grid_density=grid_density,
+            verbose=verbose,
         )
 
         # Set PBC for the surfaces so the z-direction is False

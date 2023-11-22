@@ -2,15 +2,22 @@ from abc import ABC
 import typing as tp
 from os.path import isdir, join, abspath
 import os
+import io
+import base64
 import json
+from multiprocessing import Pool
+import logging
+import itertools
 
 from pymatgen.core.structure import Structure
 from ase import Atoms
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
 import pandas as pd
 import seaborn as sns
 
+from OgreInterface.interfaces import BaseInterface
 from OgreInterface.generate import InterfaceGenerator, BaseSurfaceGenerator
 from OgreInterface.surface_matching import (
     BaseSurfaceMatcher,
@@ -18,6 +25,8 @@ from OgreInterface.surface_matching import (
 )
 from OgreInterface.surfaces import BaseSurface
 from OgreInterface import utils
+
+matplotlib.use("agg")
 
 
 class BaseInterfaceSearch(ABC):
@@ -68,8 +77,19 @@ class BaseInterfaceSearch(ABC):
         z_bounds_PSO: tp.Optional[tp.List[float]] = None,
         grid_density_PES: float = 2.5,
         use_most_stable_substrate: bool = True,
-        cmap_PES="coolwarm",
+        cmap_PES: str = "coolwarm",
+        n_workers: int = 1,
+        app_mode: bool = False,
+        dpi: int = 400,
+        verbose: bool = True,
+        fast_mode: bool = True,
     ):
+        if n_workers > 1:
+            self._verbose = False
+        else:
+            self._verbose = verbose
+
+        self._fast_mode = fast_mode
         self.surface_matching_module = surface_matching_module
         self.surface_energy_module = surface_energy_module
         self.surface_generator = surface_generator
@@ -77,6 +97,9 @@ class BaseInterfaceSearch(ABC):
         self.surface_energy_kwargs = surface_energy_kwargs
         self._refine_structure = refine_structure
         self._suppress_warnings = suppress_warnings
+        self.n_workers = n_workers
+        self._app_mode = app_mode
+        self._dpi = dpi
         if type(substrate_bulk) is str:
             self._substrate_bulk = utils.load_bulk(
                 atoms_or_structure=Structure.from_file(substrate_bulk),
@@ -138,16 +161,28 @@ class BaseInterfaceSearch(ABC):
 
         return substrate_generator, film_generator
 
+    def _calc_surface_energy(self, surface):
+        surfE_calculator = self.surface_energy_module(
+            surface=surface,
+            **self.surface_energy_kwargs,
+        )
+
+        return surfE_calculator.get_cleavage_energy()
+
     def _get_most_stable_surface(
         self, surface_generator: BaseSurfaceGenerator
     ) -> tp.List[int]:
-        surface_energies = []
-        for surface in surface_generator:
-            surfE_calculator = self.surface_energy_module(
-                surface=surface,
-                **self.surface_energy_kwargs,
-            )
-            surface_energies.append(surfE_calculator.get_cleavage_energy())
+        if self.n_workers <= 1:
+            surface_energies = [
+                self._calc_surface_energy(surface)
+                for surface in surface_generator
+            ]
+        else:
+            with Pool(self.n_workers) as p:
+                surface_energies = p.map(
+                    self._calc_surface_energy,
+                    surface_generator,
+                )
 
         surface_energies = np.round(np.array(surface_energies), 6)
         min_surface_energy = surface_energies.min()
@@ -194,6 +229,143 @@ class BaseInterfaceSearch(ABC):
     ) -> tp.Dict[str, tp.Any]:
         return {}
 
+    def _optimize_single_interface(
+        self,
+        base_dir: str,
+        interface: BaseInterface,
+    ):
+        film = interface.film
+        sub = interface.substrate
+
+        film_ind = film.termination_index
+        sub_ind = sub.termination_index
+
+        data = {
+            "filmIndex": int(film_ind),
+            "substrateIndex": int(sub_ind),
+        }
+
+        interface_dir = join(base_dir, f"film{film_ind:02d}_sub{sub_ind:02d}")
+
+        if not self._app_mode:
+            if not isdir(interface_dir):
+                os.mkdir(interface_dir)
+
+        surface_specific_props = self.run_surface_methods(
+            substrate=sub,
+            film=film,
+        )
+
+        data.update(surface_specific_props)
+
+        if not self._app_mode:
+            film.write_file(join(interface_dir, f"POSCAR_film_{film_ind:02d}"))
+            sub.write_file(join(interface_dir, f"POSCAR_sub_{sub_ind:02d}"))
+
+        surface_matcher = self.surface_matching_module(
+            interface=interface,
+            grid_density=self._grid_density_PES,
+            verbose=self._verbose,
+            **self.surface_matching_kwargs,
+        )
+
+        if self._z_bounds_PSO is None:
+            min_z = 0.5
+            max_z = 1.1 * surface_matcher._get_max_z()
+        else:
+            min_z = self._z_bounds_PSO[0]
+            max_z = self._z_bounds_PSO[1]
+
+        _ = surface_matcher.optimizePSO(
+            z_bounds=self._z_bounds_PSO,
+            max_iters=self._max_iterations_PSO,
+            n_particles=self._n_particles_PSO,
+        )
+        surface_matcher.get_optimized_structure()
+
+        opt_d_pso = interface.interfacial_distance
+
+        if not self._fast_mode:
+            stream_PES = io.BytesIO()
+            surface_matcher.run_surface_matching(
+                output=stream_PES,
+                # output=join(interface_dir, "PES_opt.png"),
+                fontsize=14,
+                cmap=self._cmap_PES,
+                dpi=self._dpi,
+            )
+            stream_PES_value = stream_PES.getvalue()
+            stream_PES_base64 = base64.b64encode(stream_PES_value).decode()
+
+            data["pesFigure"] = stream_PES_base64
+
+            if not self._app_mode:
+                with open(join(interface_dir, "PES_opt.png"), "wb") as f:
+                    f.write(stream_PES_value)
+
+        surface_matcher.get_optimized_structure()
+
+        if not self._fast_mode:
+            stream_z_shift = io.BytesIO()
+            surface_matcher.run_z_shift(
+                interfacial_distances=np.linspace(
+                    max(min_z, opt_d_pso - 2.0),
+                    min(opt_d_pso + 2.0, max_z),
+                    31,
+                ),
+                output=stream_z_shift,
+                dpi=self._dpi,
+            )
+
+            stream_z_shift_value = stream_z_shift.getvalue()
+            stream_z_shift_base64 = base64.b64encode(
+                stream_z_shift_value
+            ).decode()
+
+            data["zShiftFigure"] = stream_z_shift_base64
+
+            if not self._app_mode:
+                with open(join(interface_dir, "z_shift.png"), "wb") as f:
+                    f.write(stream_z_shift_value)
+
+        surface_matcher.get_optimized_structure()
+
+        if not self._app_mode:
+            interface.write_file(
+                join(
+                    interface_dir,
+                    f"POSCAR_interface_film{film_ind:02d}_sub{sub_ind:02d}",
+                )
+            )
+
+        opt_d = interface.interfacial_distance
+        a_shift = np.mod(interface._a_shift, 1.0)
+        b_shift = np.mod(interface._b_shift, 1.0)
+
+        adh_energy, int_energy = surface_matcher.get_current_energy()
+        film_surface_energy = surface_matcher.film_surface_energy
+        sub_surface_energy = surface_matcher.sub_surface_energy
+
+        interface_structure = interface.get_interface(orthogonal=True)
+
+        data["interfaceEnergy"] = float(int_energy)
+        data["adhesionEnergy"] = float(adh_energy)
+        data["aShift"] = float(a_shift)
+        data["bShift"] = float(b_shift)
+        data["interfacialDistance"] = float(opt_d)
+        data["filmSurfaceEnergy"] = float(film_surface_energy)
+        data["substrateSurfaceEnergy"] = float(sub_surface_energy)
+        data["fullInterfaceStructure"] = interface_structure.as_dict()
+
+        return data
+
+    def _get_layers_around_interface(
+        self,
+        structure: Structure,
+        max_thickness: float = 4.0,
+    ):
+        pass
+
     def run_interface_search(
         self,
         filter_on_charge: bool = True,
@@ -213,8 +385,9 @@ class BaseInterfaceSearch(ABC):
         else:
             base_dir = output_folder
 
-        if not isdir(base_dir):
-            os.mkdir(base_dir)
+        if not self._app_mode:
+            if not isdir(base_dir):
+                os.mkdir(base_dir)
 
         substrate_generator, film_generator = self._get_surface_generators()
 
@@ -229,34 +402,19 @@ class BaseInterfaceSearch(ABC):
             substrate_generator=substrate_generator,
         )
 
-        print(
-            f"Preparing to Optimize {len(film_and_substrate_inds)} {film_comp}({film_miller})/{sub_comp}({sub_miller}) Interfaces..."
-        )
+        if self._verbose:
+            print(
+                f"Preparing to Optimize {len(film_and_substrate_inds)} {film_comp}({film_miller})/{sub_comp}({sub_miller}) Interfaces..."
+            )
 
-        data_list = []
-        plotting_data_list = []
+        interfaces = []
 
         for i, film_sub_ind in enumerate(film_and_substrate_inds):
             film_ind = film_sub_ind[0]
             sub_ind = film_sub_ind[1]
 
-            interface_dir = join(
-                base_dir, f"film{film_ind:02d}_sub{sub_ind:02d}"
-            )
-
-            if not isdir(interface_dir):
-                os.mkdir(interface_dir)
-
             film = film_generator[film_ind]
             sub = substrate_generator[sub_ind]
-
-            surface_specific_props = self.run_surface_methods(
-                substrate=sub,
-                film=film,
-            )
-
-            film.write_file(join(interface_dir, f"POSCAR_film_{film_ind:02d}"))
-            sub.write_file(join(interface_dir, f"POSCAR_sub_{sub_ind:02d}"))
 
             interface_generator = InterfaceGenerator(
                 substrate=sub,
@@ -268,119 +426,62 @@ class BaseInterfaceSearch(ABC):
                 vacuum=60.0,
                 center=True,
                 substrate_strain_fraction=self._substrate_strain_fraction,
+                verbose=self._verbose,
             )
 
             # Generate the interfaces
-            interfaces = interface_generator.generate_interfaces()
-            interface = interfaces[0]
+            ifaces = interface_generator.generate_interfaces(
+                generate_all=False
+            )
+            iface = ifaces[0]
+
+            interfaces.append(iface)
 
             if i == 0:
-                interface.plot_interface(
-                    output=join(base_dir, "interface_view.png")
+                stream_view = io.BytesIO()
+                iface.plot_interface(
+                    output=stream_view,
                 )
 
-            surface_matcher = self.surface_matching_module(
-                interface=interface,
-                grid_density=self._grid_density_PES,
-                **self.surface_matching_kwargs,
-            )
+                stream_view_value = stream_view.getvalue()
+                stream_view_base64 = base64.b64encode(
+                    stream_view_value
+                ).decode()
 
-            if self._z_bounds_PSO is None:
-                min_z = 0.5
-                max_z = 1.1 * surface_matcher._get_max_z()
-            else:
-                min_z = self._z_bounds_PSO[0]
-                max_z = self._z_bounds_PSO[1]
+                if not self._app_mode:
+                    with open(join(base_dir, "interface_view.png"), "wb") as f:
+                        f.write(stream_view_value)
 
-            _ = surface_matcher.optimizePSO(
-                z_bounds=self._z_bounds_PSO,
-                max_iters=self._max_iterations_PSO,
-                n_particles=self._n_particles_PSO,
-            )
-            surface_matcher.get_optimized_structure()
-
-            opt_d_pso = interface.interfacial_distance
-
-            surface_matcher.run_surface_matching(
-                output=join(interface_dir, "PES_opt.png"),
-                fontsize=14,
-                cmap=self._cmap_PES,
-            )
-
-            surface_matcher.get_optimized_structure()
-
-            surface_matcher.run_z_shift(
-                interfacial_distances=np.linspace(
-                    max(min_z, opt_d_pso - 2.0),
-                    min(opt_d_pso + 2.0, max_z),
-                    31,
-                ),
-                output=join(interface_dir, "z_shift.png"),
-            )
-
-            surface_matcher.get_optimized_structure()
-
-            interface.write_file(
-                join(
-                    interface_dir,
-                    f"POSCAR_interface_film{film_ind:02d}_sub{sub_ind:02d}",
+        if self.n_workers <= 1:
+            data_list = []
+            for interface in interfaces:
+                data = self._optimize_single_interface(
+                    base_dir=base_dir,
+                    interface=interface,
                 )
-            )
+                data_list.append(data)
+        else:
+            with Pool(self.n_workers) as p:
+                inputs = zip(itertools.repeat(base_dir), interfaces)
+                data_list = p.starmap(self._optimize_single_interface, inputs)
 
-            opt_d = interface.interfacial_distance
-            a_shift = np.mod(interface._a_shift, 1.0)
-            b_shift = np.mod(interface._b_shift, 1.0)
+        df = pd.DataFrame(data=data_list)
+        df = df[
+            [
+                "filmIndex",
+                "substrateIndex",
+                "interfaceEnergy",
+                "adhesionEnergy",
+                "aShift",
+                "bShift",
+                "interfacialDistance",
+                "filmSurfaceEnergy",
+                "substrateSurfaceEnergy",
+            ]
+        ]
 
-            adh_energy, int_energy = surface_matcher.get_current_energy()
-            film_surface_energy = surface_matcher.film_surface_energy
-            sub_surface_energy = surface_matcher.sub_surface_energy
-
-            interface_structure = interface.get_interface(orthogonal=True)
-
-            plotting_data = {
-                "filmIndex": int(film_ind),
-                "substrateIndex": int(sub_ind),
-                "interfaceEnergy": float(int_energy),
-                "adhesionEnergy": float(adh_energy),
-                "aShift": float(a_shift),
-                "bShift": float(b_shift),
-                "interfacialDistance": float(opt_d),
-                "filmSurfaceEnergy": float(film_surface_energy),
-                "substrateSurfaceEnergy": float(sub_surface_energy),
-            }
-            plotting_data_list.append(plotting_data)
-
-            iter_data = {
-                "pesFigurePath": abspath(join(interface_dir, "PES_opt.png")),
-                "zShiftFigurePath": abspath(
-                    join(interface_dir, "z_shift.png")
-                ),
-                "interfaceStructure": interface_structure.as_dict(),
-            }
-            iter_data.update(surface_specific_props)
-            iter_data.update(plotting_data)
-
-            data_list.append(iter_data)
-            print("")
-
-        run_data = {
-            "substrateBulk": self._substrate_bulk.as_dict(),
-            "filmBulk": self._film_bulk.as_dict(),
-            "filmMillerIndex": list(self._film_miller_index),
-            "substrateMillerIndex": list(self._substrate_miller_index),
-            "maxStrain": float(self._max_strain),
-            "maxArea": self._max_area and float(self._max_area),
-            "maxAreaMismatch": self._max_area_mismatch
-            and float(self._max_area_mismatch),
-            "optData": data_list,
-        }
-
-        with open(join(base_dir, "run_data.json"), "w") as f:
-            json_str = json.dumps(run_data, indent=4, sort_keys=True)
-            f.write(json_str)
-
-        df = pd.DataFrame(data=plotting_data_list)
-        df.to_csv(join(base_dir, "opt_data.csv"), index=False)
+        if not self._app_mode:
+            df.to_csv(join(base_dir, "opt_data.csv"), index=False)
 
         x_label_key = "(Film Index, Substrate Index)"
         df[x_label_key] = [
@@ -400,7 +501,7 @@ class BaseInterfaceSearch(ABC):
 
         fig, (ax_adh, ax_int) = plt.subplots(
             figsize=(max(len(df) / 3, 7), 7),
-            dpi=400,
+            dpi=self._dpi,
             nrows=2,
         )
 
@@ -429,6 +530,40 @@ class BaseInterfaceSearch(ABC):
         )
 
         fig.tight_layout(pad=0.5)
-        fig.savefig(join(base_dir, "opt_energies.png"), transparent=False)
+
+        stream_energies = io.BytesIO()
+        fig.savefig(
+            stream_energies,
+            transparent=False,
+        )
 
         plt.close(fig=fig)
+
+        stream_energies_value = stream_energies.getvalue()
+        stream_energies_base64 = base64.b64encode(
+            stream_energies_value
+        ).decode()
+
+        if not self._app_mode:
+            with open(join(base_dir, "opt_energies.png"), "wb") as f:
+                f.write(stream_energies_value)
+
+        run_data = {
+            "substrateBulk": self._substrate_bulk.as_dict(),
+            "filmBulk": self._film_bulk.as_dict(),
+            "filmMillerIndex": list(self._film_miller_index),
+            "substrateMillerIndex": list(self._substrate_miller_index),
+            "maxStrain": float(self._max_strain),
+            "maxArea": self._max_area and float(self._max_area),
+            "maxAreaMismatch": self._max_area_mismatch
+            and float(self._max_area_mismatch),
+            "matchFigure": stream_view_base64,
+            "totalEnergiesFigure": stream_energies_base64,
+            "optData": data_list,
+        }
+
+        # TODO: return data if in app mode
+        if not self._app_mode:
+            with open(join(base_dir, "run_data.json"), "w") as f:
+                json_str = json.dumps(run_data, indent=4, sort_keys=True)
+                f.write(json_str)

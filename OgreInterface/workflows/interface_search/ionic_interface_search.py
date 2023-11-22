@@ -1,5 +1,6 @@
 import typing as tp
 from os.path import join
+from multiprocessing import Pool, cpu_count
 
 from pymatgen.core.structure import Structure
 from ase import Atoms
@@ -61,6 +62,11 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         cmap_PES="coolwarm",
         auto_determine_born_n: bool = False,
         born_n: float = 12.0,
+        n_workers: int = cpu_count(),
+        app_mode: bool = False,
+        dpi: int = 400,
+        verbose: bool = True,
+        fast_mode: bool = False,
     ):
         surface_matching_kwargs = {
             "auto_determine_born_n": auto_determine_born_n,
@@ -89,6 +95,11 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
             grid_density_PES=grid_density_PES,
             use_most_stable_substrate=use_most_stable_substrate,
             cmap_PES=cmap_PES,
+            n_workers=n_workers,
+            app_mode=app_mode,
+            dpi=dpi,
+            verbose=verbose,
+            fast_mode=fast_mode,
         )
 
     def _get_film_and_substrate_inds(
@@ -131,11 +142,12 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         substrate_generator: SurfaceGenerator,
         base_dir: str,
     ) -> tp.Any:
-        plot_surface_charge_matrix(
-            films=film_generator,
-            substrates=substrate_generator,
-            output=join(base_dir, "surface_charge_matrix.png"),
-        )
+        if not self._app_mode:
+            plot_surface_charge_matrix(
+                films=film_generator,
+                substrates=substrate_generator,
+                output=join(base_dir, "surface_charge_matrix.png"),
+            )
 
     def run_surface_methods(
         self,

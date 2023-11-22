@@ -9,7 +9,6 @@ import warnings
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
-from pymatgen.io.vasp.inputs import Poscar
 import numpy as np
 from ase import Atoms
 
