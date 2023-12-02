@@ -299,7 +299,7 @@ class BaseSurfaceGenerator(Sequence):
         # Add the atomic layer site property to the slab base
         slab_base.add_site_property(
             "atomic_layer_index",
-            atomic_layers.tolist(),
+            np.round(atomic_layers).astype(int).tolist(),
         )
 
         # Get the bulk equivalent to create the key associated with the given

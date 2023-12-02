@@ -1039,11 +1039,20 @@ class BaseInterface(ABC):
 
         if self.center:
             # Get the new vacuum length, needed for shifting
-            vacuum_len = interface_c_len - interface_structure_len
+            c_coords = np.mod(
+                np.round(non_ortho_interface_struc.frac_coords[:, -1], 6), 1.0
+            )
+            min_c = c_coords.min()
+            max_c = c_coords.max()
+            mid = (min_c + max_c) / 2
+            center_shift = 0.5 - mid
+
+            # vacuum_len = interface_c_len - interface_structure_len
 
             # Find the fractional coordinates of shifting the structure up by half the amount of vacuum cells
-            center_shift = np.ceil(vacuum_len / oriented_bulk_c) // 2
-            center_shift *= oriented_bulk_c / interface_c_len
+            # center_shift = vacuum_len / 2
+            # center_shift = np.ceil(vacuum_len / oriented_bulk_c) // 2
+            # center_shift *= oriented_bulk_c / interface_c_len
 
             # Center the structure in the vacuum
             non_ortho_interface_struc.translate_sites(

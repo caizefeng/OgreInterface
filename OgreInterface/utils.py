@@ -24,6 +24,11 @@ import networkx as nx
 import spglib
 
 
+def sort_slab(structure: Structure) -> None:
+    "Inplane sort based first on electronegativity, then c, then a, and then b"
+    structure.sort(key=lambda x: (x.species.average_electroneg, x.c, x.a, x.b))
+
+
 def shift_film(
     interface: Structure,
     shift: tp.Iterable,
@@ -731,7 +736,9 @@ def get_layer_supercell(
         atomic_layers = np.array(new_site_properties["atomic_layer_index"])
         offset = (atomic_layers.max() * sc_layer_inds) + sc_layer_inds
         new_atomic_layers = atomic_layers + offset
-        new_site_properties["atomic_layer_index"] = new_atomic_layers
+        new_site_properties["atomic_layer_index"] = new_atomic_layers.astype(
+            int
+        ).tolist()
 
     layer_transform = np.eye(3)
     layer_transform[-1, -1] = layers + vacuum_scale

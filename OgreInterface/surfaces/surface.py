@@ -11,6 +11,7 @@ from pymatgen.core.periodic_table import Species
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
 from pymatgen.analysis.local_env import CrystalNN
+import pymatgen.util.coord as coord_utils
 import numpy as np
 
 from OgreInterface import utils
@@ -492,18 +493,88 @@ class Surface(BaseSurface):
             # Reproduce the passivated structure
             vacuum_scale = 4
             layer_struc = utils.get_layer_supercell(
-                structure=obs, layers=layers, vacuum_scale=vacuum_scale
+                structure=obs,
+                layers=layers,
+                vacuum_scale=vacuum_scale,
             )
 
-            center_shift = 0.5 * (vacuum_scale / (vacuum_scale + layers))
+            if layer_struc.lattice.volume >= structure.lattice.volume:
+                new_lattice = layer_struc.lattice
+
+                frac_coords = structure.frac_coords
+                ab_coords = frac_coords[:, :2]
+                ab_norm = np.linalg.norm(ab_coords, axis=1)
+                c_coords = frac_coords[:, -1]
+
+                ref_mask = (c_coords == c_coords.max()) & (
+                    ab_norm == ab_norm.min()
+                )
+                ref_ind = np.where(ref_mask)[0][0]
+
+                structure = Structure(
+                    lattice=new_lattice,
+                    species=structure.species,
+                    coords=structure.cart_coords,
+                    to_unit_cell=True,
+                    coords_are_cartesian=True,
+                    site_properties=structure.site_properties,
+                )
+
+                shift = structure.frac_coords[ref_ind]
+                shift[-1] = 0.0
+
+                structure.translate_sites(
+                    indices=range(len(structure)),
+                    vector=-shift,
+                    frac_coords=True,
+                    to_unit_cell=True,
+                )
+
+            else:
+                new_lattice = structure.lattice
+
+                frac_coords = layer_struc.frac_coords
+                ab_coords = frac_coords[:, :2]
+                ab_norm = np.linalg.norm(ab_coords, axis=1)
+                c_coords = frac_coords[:, -1]
+
+                ref_mask = (c_coords == c_coords.max()) & (
+                    ab_norm == ab_norm.min()
+                )
+
+                ref_ind = np.where(ref_mask)[0][0]
+
+                layer_struc = Structure(
+                    lattice=new_lattice,
+                    species=layer_struc.species,
+                    coords=layer_struc.cart_coords,
+                    to_unit_cell=True,
+                    coords_are_cartesian=True,
+                    site_properties=layer_struc.site_properties,
+                )
+
+                shift = layer_struc.frac_coords[ref_ind]
+                shift[-1] = 0.0
+
+                layer_struc.translate_sites(
+                    indices=range(len(layer_struc)),
+                    vector=-shift,
+                    frac_coords=True,
+                    to_unit_cell=True,
+                )
+
+            c_coords = np.mod(np.round(layer_struc.frac_coords[:, -1], 6), 1.0)
+            min_c = c_coords.min()
+            max_c = c_coords.max()
+            mid = (min_c + max_c) / 2
+            center_shift = 0.5 - mid
+
             layer_struc.translate_sites(
                 indices=range(len(layer_struc)),
                 vector=[0, 0, center_shift],
                 frac_coords=True,
                 to_unit_cell=True,
             )
-
-            layer_struc.sort()
 
             # Add hydrogen_str propery. This avoids the PyMatGen warning
             layer_struc.add_site_property(
@@ -563,21 +634,8 @@ class Surface(BaseSurface):
                             bonds["charge"],
                         )
 
-            layer_struc.sort()
-
-            shifts = np.array(
-                [
-                    [0, 0, 0],
-                    [1, 0, 0],
-                    [0, 1, 0],
-                    [1, 1, 0],
-                    [-1, 1, 0],
-                    [1, -1, 0],
-                    [-1, -1, 0],
-                    [-1, 0, 0],
-                    [0, -1, 0],
-                ]
-            ).dot(structure.lattice.matrix)
+            utils.sort_slab(layer_struc)
+            utils.sort_slab(structure)
 
             # Get the index if the hydrogens
             hydrogen_index = np.where(np.array(structure.atomic_numbers) == 1)[
@@ -602,36 +660,34 @@ class Surface(BaseSurface):
 
             # Get the coordinates of the bond centers in the actual relaxed structure
             # and the recreated ideal passivated structure
-            relaxed_bond_centers = structure.cart_coords[post_pas_bond_centers]
-            ideal_bond_centers = layer_struc.cart_coords[post_pas_bond_centers]
+            relaxed_bond_centers = structure.frac_coords[post_pas_bond_centers]
+            ideal_bond_centers = layer_struc.frac_coords[post_pas_bond_centers]
 
             # Get the coordinates of the hydrogens in the actual relaxed structure
             # and the recreated ideal passivated structure
-            relaxed_hydrogens = structure.cart_coords[hydrogen_index]
-            ideal_hydrogens = layer_struc.cart_coords[hydrogen_index]
+            relaxed_hydrogens = structure.frac_coords[hydrogen_index]
+            ideal_hydrogens = layer_struc.frac_coords[hydrogen_index]
 
             # Substract the bond center positions from the hydrogen positions to get only the bond vector
             relaxed_hydrogens -= relaxed_bond_centers
             ideal_hydrogens -= ideal_bond_centers
 
+            relaxed_hydrogens_ref = np.mod(relaxed_hydrogens, 1.0)
+            ideal_hydrogens_ref = np.mod(ideal_hydrogens, 1.0)
+
+            cart_dist_vectors = coord_utils.pbc_shortest_vectors(
+                lattice=new_lattice,
+                fcoords1=ideal_hydrogens_ref,
+                fcoords2=relaxed_hydrogens_ref,
+            )
+
             # Mapping to accessing the bond_dict
             top_bot_dict = {1: "top", 0: "bottom"}
 
-            # Lopp through the matching hydrogens and indices to get the difference between the bond vectors
-            for H_ind, H_ideal, H_relaxed in zip(
-                hydrogen_index, ideal_hydrogens, relaxed_hydrogens
-            ):
-                # Find all periodic shifts of the relaxed hydrogens
-                relaxed_shifts = H_relaxed + shifts
-
-                # Find the difference between the ideal hydrogens and all 3x3 periodic images of the relaxed hydrogen
-                diffs = relaxed_shifts - H_ideal
-
-                # Find the length of the bond difference vectors
-                norm_diffs = np.linalg.norm(diffs, axis=1)
-
-                # Find the difference vector between the ideal hydrogen and the closest relaxed hydrogen image
-                bond_diff = diffs[np.argmin(norm_diffs)]
+            for i, H_ind in enumerate(hydrogen_index):
+                cart_dists = cart_dist_vectors[i]
+                norms = np.linalg.norm(cart_dists, axis=1)
+                bond_diff = cart_dists[np.argmin(norms)]
 
                 # Get the bond string of the hydrogen
                 bond_str = bond_strs[H_ind].split(",")
@@ -652,6 +708,42 @@ class Surface(BaseSurface):
 
                 # Add the bond diff to the bond to get the relaxed position
                 bond_dict[side][center_ind]["bonds"][bond_ind] += bond_diff
+
+            # # Lopp through the matching hydrogens and indices to get the difference between the bond vectors
+            # for H_ind, H_ideal, H_relaxed in zip(
+            #     hydrogen_index, ideal_hydrogens, relaxed_hydrogens
+            # ):
+            #     # Find all periodic shifts of the relaxed hydrogens
+            #     relaxed_shifts = H_relaxed + shifts
+
+            #     # Find the difference between the ideal hydrogens and all 3x3 periodic images of the relaxed hydrogen
+            #     diffs = relaxed_shifts - H_ideal
+
+            #     # Find the length of the bond difference vectors
+            #     norm_diffs = np.linalg.norm(diffs, axis=1)
+
+            #     # Find the difference vector between the ideal hydrogen and the closest relaxed hydrogen image
+            #     bond_diff = diffs[np.argmin(norm_diffs)]
+
+            #     # Get the bond string of the hydrogen
+            #     bond_str = bond_strs[H_ind].split(",")
+
+            #     # Extract the side from the bond string (the last element)
+            #     side = top_bot_dict[int(bond_str[-1])]
+
+            #     # Get the center index
+            #     center_ind = int(bond_str[1])
+
+            #     # Extract the bond info from the bond_dict
+            #     bond_info = bond_dict[side][center_ind]
+
+            #     # Find which bond this hydrogen corresponds to
+            #     bond_ind = bond_info["bond_strings"].index(
+            #         ",".join(bond_str[1:])
+            #     )
+
+            #     # Add the bond diff to the bond to get the relaxed position
+            #     bond_dict[side][center_ind]["bonds"][bond_ind] += bond_diff
 
             return bond_dict
         else:

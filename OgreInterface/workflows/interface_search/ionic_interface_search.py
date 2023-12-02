@@ -3,11 +3,13 @@ from os.path import join
 from multiprocessing import Pool, cpu_count
 
 from pymatgen.core.structure import Structure
+from pymatgen.analysis.local_env import CrystalNN
 from ase import Atoms
 import numpy as np
 
 from OgreInterface.generate import SurfaceGenerator
 from OgreInterface.surfaces import Surface
+from OgreInterface.interfaces import Interface
 from OgreInterface.surface_matching import (
     IonicSurfaceMatcher,
     IonicSurfaceEnergy,
@@ -48,6 +50,7 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         substrate_miller_index: tp.List[int],
         film_miller_index: tp.List[int],
         minimum_slab_thickness: float = 18.0,
+        vacuum: float = 60.0,
         max_strain: float = 0.01,
         max_area_mismatch: tp.Optional[float] = None,
         max_area: tp.Optional[float] = None,
@@ -83,6 +86,7 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
             surface_matching_kwargs=surface_matching_kwargs,
             surface_energy_kwargs=surface_matching_kwargs,
             minimum_slab_thickness=minimum_slab_thickness,
+            vacuum=vacuum,
             max_strain=max_strain,
             max_area_mismatch=max_area_mismatch,
             max_area=max_area,
@@ -135,6 +139,80 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
                         film_and_substrate_inds.append((i, j))
 
         return film_and_substrate_inds
+
+    def _get_surface_atoms(
+        self,
+        oriented_bulk_structure: Structure,
+    ) -> tp.Dict[str, np.array]:
+        oxi_struc = oriented_bulk_structure.copy()
+        oxi_struc.add_oxidation_state_by_site(
+            oriented_bulk_structure.site_properties["charge"]
+        )
+
+        cnn = CrystalNN(search_cutoff=7.0, cation_anion=True)
+
+        surface_atom_dict = {"top": [], "bottom": []}
+
+        # Loop through all sites in the structure to get the bonding environments
+        for i, site in enumerate(oxi_struc.sites):
+            # Get nearest neighbor info dict
+            info_dict = cnn.get_nn_info(oxi_struc, i)
+
+            obs_equiv = site.properties["oriented_bulk_equivalent"]
+
+            # Loop through all the neighboring sites
+            for neighbor in info_dict:
+                if neighbor["image"][-1] < 0:
+                    surface_atom_dict["bottom"].append(obs_equiv)
+
+                if neighbor["image"][-1] > 0:
+                    surface_atom_dict["top"].append(obs_equiv)
+
+        for k, v in surface_atom_dict.items():
+            surface_atom_dict[k] = np.unique(v)
+
+        return surface_atom_dict
+
+    def _get_layers_around_interface(self, interface: Interface) -> Structure:
+        structure = interface.get_interface(orthogonal=True)
+        sub_layers = interface.substrate.layers - 1
+        site_props = structure.site_properties
+
+        is_film = np.array(site_props["is_film"])
+        is_sub = np.logical_not(is_film)
+        obs_equiv = np.array(site_props["oriented_bulk_equivalent"])
+        layer_index = np.array(site_props["layer_index"])
+
+        sub_obs = interface.substrate_oriented_bulk_structure
+        film_obs = interface.film_oriented_bulk_structure
+
+        sub_surface_atoms = self._get_surface_atoms(
+            oriented_bulk_structure=sub_obs
+        )
+
+        film_surface_atoms = self._get_surface_atoms(
+            oriented_bulk_structure=film_obs
+        )
+
+        sub_top = (
+            (layer_index == sub_layers)
+            & is_sub
+            & np.isin(obs_equiv, sub_surface_atoms["top"])
+        )
+
+        film_bottom = (
+            (layer_index == 0)
+            & is_film
+            & np.isin(obs_equiv, film_surface_atoms["bottom"])
+        )
+
+        inds_to_keep = np.logical_or(sub_top, film_bottom)
+        inds_to_delete = np.where(np.logical_not(inds_to_keep))[0]
+
+        small_structure = structure.copy()
+        small_structure.remove_sites(inds_to_delete)
+
+        return small_structure
 
     def run_surface_generator_methods(
         self,

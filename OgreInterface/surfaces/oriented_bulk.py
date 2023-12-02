@@ -238,7 +238,7 @@ class OrientedBulk(Sequence):
             )
             structure.add_site_property(
                 "bulk_equivalent",
-                dataset["equivalent_atoms"][prim_inds].tolist(),
+                dataset["equivalent_atoms"][prim_inds].astype(int).tolist(),
             )
         else:
             structure.add_site_property(
@@ -248,7 +248,7 @@ class OrientedBulk(Sequence):
 
             structure.add_site_property(
                 "bulk_equivalent",
-                dataset["equivalent_atoms"].tolist(),
+                dataset["equivalent_atoms"].astype(int).tolist(),
             )
 
     def _get_primitive_bulk_structure(self, structure: Structure) -> Structure:
@@ -421,8 +421,9 @@ class OrientedBulk(Sequence):
         # Lattice of the bulk structure
         lattice = self.bulk.lattice
 
-        # Inter-layer distance of the lattice plane
-        d_hkl = lattice.d_hkl(self.miller_index)
+        # Inter-layer distance of the lattice plane (from initial structure not primitive)
+        d_hkl = self._init_bulk.lattice.d_hkl(self._init_miller_index)
+        # d_hkl = lattice.d_hkl(self.miller_index)
 
         # Stack the a- and b-vectors into a (2x3) matrix
         ab_vecs = np.vstack([a_vector, b_vector])

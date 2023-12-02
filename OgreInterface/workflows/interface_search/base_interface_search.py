@@ -10,6 +10,8 @@ import logging
 import itertools
 
 from pymatgen.core.structure import Structure
+from pymatgen.io.vasp.inputs import Poscar
+from pymatgen.core.composition import Composition
 from ase import Atoms
 import numpy as np
 import matplotlib.pyplot as plt
@@ -66,6 +68,7 @@ class BaseInterfaceSearch(ABC):
         surface_matching_kwargs: tp.Dict[str, tp.Any] = {},
         surface_energy_kwargs: tp.Dict[str, tp.Any] = {},
         minimum_slab_thickness: float = 18.0,
+        vacuum: float = 60.0,
         max_strain: float = 0.01,
         max_area_mismatch: tp.Optional[float] = None,
         max_area: tp.Optional[float] = None,
@@ -132,6 +135,7 @@ class BaseInterfaceSearch(ABC):
         self._use_most_stable_substrate = use_most_stable_substrate
         self._grid_density_PES = grid_density_PES
         self._minimum_slab_thickness = minimum_slab_thickness
+        self._vacuum = vacuum
         self._substrate_miller_index = substrate_miller_index
         self._film_miller_index = film_miller_index
         self._max_area_mismatch = max_area_mismatch
@@ -330,14 +334,6 @@ class BaseInterfaceSearch(ABC):
 
         surface_matcher.get_optimized_structure()
 
-        if not self._app_mode:
-            interface.write_file(
-                join(
-                    interface_dir,
-                    f"POSCAR_interface_film{film_ind:02d}_sub{sub_ind:02d}",
-                )
-            )
-
         opt_d = interface.interfacial_distance
         a_shift = np.mod(interface._a_shift, 1.0)
         b_shift = np.mod(interface._b_shift, 1.0)
@@ -348,6 +344,37 @@ class BaseInterfaceSearch(ABC):
 
         interface_structure = interface.get_interface(orthogonal=True)
 
+        small_interface_structure = self._get_layers_around_interface(
+            interface,
+        )
+
+        (
+            film_termination,
+            substrate_termination,
+        ) = self._get_terminations_from_small_interface(
+            structure=small_interface_structure,
+        )
+
+        if not self._app_mode:
+            interface.write_file(
+                join(
+                    interface_dir,
+                    f"POSCAR_interface_film{film_ind:02d}_sub{sub_ind:02d}",
+                )
+            )
+            Poscar(small_interface_structure).write_file(
+                join(
+                    interface_dir,
+                    f"POSCAR_interface_film{film_ind:02d}_sub{sub_ind:02d}_small",
+                )
+            )
+
+        # interface_structure.make_supercell([2, 2, 1])
+        # small_interface_structure.make_supercell([2, 2, 1])
+
+        interface_structure.lattice._pbc = (True, True, False)
+        small_interface_structure.lattice._pbc = (True, True, False)
+
         data["interfaceEnergy"] = float(int_energy)
         data["adhesionEnergy"] = float(adh_energy)
         data["aShift"] = float(a_shift)
@@ -356,15 +383,93 @@ class BaseInterfaceSearch(ABC):
         data["filmSurfaceEnergy"] = float(film_surface_energy)
         data["substrateSurfaceEnergy"] = float(sub_surface_energy)
         data["fullInterfaceStructure"] = interface_structure.as_dict()
+        data["smallInterfaceStructure"] = small_interface_structure.as_dict()
+        data["filmTerminationComp"] = film_termination
+        data["substrateTerminationComp"] = substrate_termination
+        data["area"] = interface.area
+        data["strain"] = 100 * interface.match.strain
 
         return data
 
+    def _get_terminations_from_small_interface(
+        self, structure: Structure
+    ) -> tp.Tuple[str, str]:
+        is_film = np.array(structure.site_properties["is_film"])
+        is_sub = np.logical_not(is_film)
+        atomic_numbers = np.array(structure.atomic_numbers).astype(int)
+        unique_film_numbers, unique_film_counts = np.unique(
+            atomic_numbers[is_film], return_counts=True
+        )
+        unique_sub_numbers, unique_sub_counts = np.unique(
+            atomic_numbers[is_sub], return_counts=True
+        )
+
+        film_comp = Composition(
+            {n: c for n, c in zip(unique_film_numbers, unique_film_counts)}
+        )
+
+        sub_comp = Composition(
+            {n: c for n, c in zip(unique_sub_numbers, unique_sub_counts)}
+        )
+
+        return film_comp.reduced_formula, sub_comp.reduced_formula
+
     def _get_layers_around_interface(
         self,
-        structure: Structure,
+        interface: BaseInterface,
         max_thickness: float = 4.0,
-    ):
-        pass
+    ) -> Structure:
+        structure = interface.get_interface(orthogonal=True)
+
+        is_film = np.array(structure.site_properties["is_film"])
+        is_sub = np.logical_not(is_film)
+        atomic_layers = np.array(
+            structure.site_properties["atomic_layer_index"]
+        )
+
+        z_coords = structure.cart_coords[:, -1]
+
+        film_bottom = z_coords[is_film].min()
+        sub_top = z_coords[is_sub].max()
+
+        rel_sub_coords = sub_top - z_coords
+        rel_film_coords = z_coords - film_bottom
+
+        sub_mask = (rel_sub_coords <= max_thickness) & is_sub
+        film_mask = (rel_film_coords <= max_thickness) & is_film
+
+        n_sub_layers = (
+            atomic_layers[is_sub].max() - atomic_layers[sub_mask].min()
+        )
+        n_film_layers = atomic_layers[film_mask].max()
+
+        inds_to_keep = []
+
+        for i in range(n_sub_layers):
+            sub_inds = interface.get_substrate_layer_indices(
+                layer_from_interface=i,
+                atomic_layers=True,
+            )
+            inds_to_keep.append(sub_inds)
+
+        for i in range(n_film_layers):
+            film_inds = interface.get_film_layer_indices(
+                layer_from_interface=i,
+                atomic_layers=True,
+            )
+
+            inds_to_keep.append(film_inds)
+
+        inds_to_keep = np.concatenate(inds_to_keep)
+        all_inds = np.ones(len(structure)).astype(bool)
+        all_inds[inds_to_keep] = False
+
+        inds_to_delete = np.where(all_inds)[0]
+
+        small_structure = structure.copy()
+        small_structure.remove_sites(inds_to_delete)
+
+        return small_structure
 
     def run_interface_search(
         self,
@@ -423,7 +528,7 @@ class BaseInterfaceSearch(ABC):
                 max_area_mismatch=self._max_area_mismatch,
                 max_area=self._max_area,
                 interfacial_distance=2.0,
-                vacuum=60.0,
+                vacuum=self._vacuum,
                 center=True,
                 substrate_strain_fraction=self._substrate_strain_fraction,
                 verbose=self._verbose,
@@ -464,6 +569,8 @@ class BaseInterfaceSearch(ABC):
             with Pool(self.n_workers) as p:
                 inputs = zip(itertools.repeat(base_dir), interfaces)
                 data_list = p.starmap(self._optimize_single_interface, inputs)
+
+        data_list.sort(key=lambda x: x["interfaceEnergy"])
 
         df = pd.DataFrame(data=data_list)
         df = df[
@@ -548,22 +655,31 @@ class BaseInterfaceSearch(ABC):
             with open(join(base_dir, "opt_energies.png"), "wb") as f:
                 f.write(stream_energies_value)
 
+        film_miller = list(self._film_miller_index)
+        substrate_miller = list(self._substrate_miller_index)
+
         run_data = {
-            "substrateBulk": self._substrate_bulk.as_dict(),
-            "filmBulk": self._film_bulk.as_dict(),
-            "filmMillerIndex": list(self._film_miller_index),
-            "substrateMillerIndex": list(self._substrate_miller_index),
-            "maxStrain": float(self._max_strain),
-            "maxArea": self._max_area and float(self._max_area),
-            "maxAreaMismatch": self._max_area_mismatch
-            and float(self._max_area_mismatch),
-            "matchFigure": stream_view_base64,
-            "totalEnergiesFigure": stream_energies_base64,
-            "optData": data_list,
+            "bulkData": {
+                "substrateBulk": self._substrate_bulk.to_json(),
+                "filmBulk": self._film_bulk.to_json(),
+            },
+            "optData": {
+                "filmMillerIndex": film_miller,
+                "substrateMillerIndex": substrate_miller,
+                "maxStrain": float(100 * self._max_strain),
+                "maxArea": self._max_area and float(self._max_area),
+                "maxAreaMismatch": self._max_area_mismatch
+                and float(self._max_area_mismatch),
+                "matchFigure": stream_view_base64,
+                "totalEnergiesFigure": stream_energies_base64,
+                "interfaceData": data_list,
+            },
         }
 
         # TODO: return data if in app mode
-        if not self._app_mode:
+        if self._app_mode:
+            return run_data["optData"]
+        else:
             with open(join(base_dir, "run_data.json"), "w") as f:
                 json_str = json.dumps(run_data, indent=4, sort_keys=True)
                 f.write(json_str)
