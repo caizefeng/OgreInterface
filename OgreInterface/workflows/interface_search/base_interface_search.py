@@ -369,9 +369,6 @@ class BaseInterfaceSearch(ABC):
                 )
             )
 
-        # interface_structure.make_supercell([2, 2, 1])
-        # small_interface_structure.make_supercell([2, 2, 1])
-
         interface_structure.lattice._pbc = (True, True, False)
         small_interface_structure.lattice._pbc = (True, True, False)
 

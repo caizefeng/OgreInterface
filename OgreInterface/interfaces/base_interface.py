@@ -21,10 +21,9 @@ import numpy as np
 from ase import Atoms
 
 from OgreInterface import utils
+from OgreInterface.surfaces import OrientedBulk, Surface, BaseSurface
 from OgreInterface.lattice_match import OgreMatch
 from OgreInterface.plotting_tools import plot_match
-from OgreInterface.surfaces.surface import Surface
-from OgreInterface.surfaces.base_surface import BaseSurface
 from OgreInterface.surfaces.molecular_surface import MolecularSurface
 
 if tp.TYPE_CHECKING:
@@ -170,8 +169,16 @@ class BaseInterface(ABC):
         return matrix[:2]
 
     @property
-    def uvw_basis(self) -> np.ndarray:
+    def crystallographic_basis(self) -> np.ndarray:
         return np.eye(3).astype(int)
+
+    @property
+    def formula_with_miller(self) -> str:
+        film_str = (
+            f"{self.film.formula_with_miller}[{self.film.termination_index}]"
+        )
+        substrate_str = f"{self.substrate.formula_with_miller}[{self.substrate.termination_index}]"
+        return f"({film_str}/{substrate_str})"
 
     @property
     def oriented_bulk_structure(self) -> Structure:
@@ -179,6 +186,10 @@ class BaseInterface(ABC):
             structure=self.substrate.oriented_bulk_structure,
             convert_to_atoms=False,
         )
+
+    @property
+    def oriented_bulk(self) -> OrientedBulk:
+        return self.substrate.oriented_bulk
 
     @property
     def substrate_oriented_bulk_supercell(self) -> Structure:
@@ -737,7 +748,7 @@ class BaseInterface(ABC):
                     self.substrate._non_orthogonal_slab_structure.copy()
                 )
                 obs_supercell = self.substrate.oriented_bulk_structure.copy()
-            elif type(self.substrate) is Interface:
+            elif issubclass(type(self.substrate), BaseInterface):
                 supercell = self.substrate._non_orthogonal_structure.copy()
                 obs_supercell = None
 
