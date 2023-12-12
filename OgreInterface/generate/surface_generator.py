@@ -85,6 +85,7 @@ class SurfaceGenerator(BaseSurfaceGenerator):
         generate_all: bool = True,
         lazy: bool = False,
         suppress_warnings: bool = False,
+        layer_grouping_tolarence: Optional[float] = None,
     ) -> SelfSurfaceGenerator:
         super().__init__(
             bulk=bulk,
@@ -98,6 +99,7 @@ class SurfaceGenerator(BaseSurfaceGenerator):
             generate_all=generate_all,
             lazy=lazy,
             suppress_warnings=suppress_warnings,
+            layer_grouping_tolarence=layer_grouping_tolarence,
         )
 
     @classmethod
@@ -113,6 +115,7 @@ class SurfaceGenerator(BaseSurfaceGenerator):
         generate_all: bool = True,
         lazy: bool = False,
         suppress_warnings: bool = False,
+        layer_grouping_tolarence: Optional[float] = None,
     ) -> SelfSurfaceGenerator:
         return super().from_file(
             filename=filename,
@@ -125,6 +128,7 @@ class SurfaceGenerator(BaseSurfaceGenerator):
             generate_all=generate_all,
             lazy=lazy,
             suppress_warnings=suppress_warnings,
+            layer_grouping_tolarence=layer_grouping_tolarence,
         )
 
     def _get_slab_base(self) -> OrientedBulk:

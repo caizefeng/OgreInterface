@@ -161,6 +161,7 @@ class BaseSurfaceGenerator(Sequence):
         generate_all: bool = True,
         lazy: bool = False,
         suppress_warnings: bool = False,
+        layer_grouping_tolarence: Optional[float] = None,
     ) -> SelfBaseSurfaceGenerator:
         """Creating a SurfaceGenerator from a file (i.e. POSCAR, cif, etc)
 
@@ -194,6 +195,7 @@ class BaseSurfaceGenerator(Sequence):
             generate_all=generate_all,
             lazy=lazy,
             suppress_warnings=suppress_warnings,
+            layer_grouping_tolarence=layer_grouping_tolarence,
         )
 
     def __getitem__(self, i) -> Surface:
