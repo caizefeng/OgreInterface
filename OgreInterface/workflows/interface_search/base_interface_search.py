@@ -319,6 +319,7 @@ class BaseInterfaceSearch(ABC):
                 ),
                 output=stream_z_shift,
                 dpi=self._dpi,
+                zoom_to_minimum=True,
             )
 
             stream_z_shift_value = stream_z_shift.getvalue()

@@ -923,7 +923,8 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
         fontsize: int = 14,
         output: str = "z_shift.png",
         dpi: int = 400,
-        save_raw_data_file=None,
+        save_raw_data_file: tp.Optional[str] = None,
+        zoom_to_minimum: bool = False,
     ):
         """This function calculates the negated adhesion energy of an interface as a function of the interfacial distance
 
@@ -1000,6 +1001,13 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
                 ec="black",
             ),
         )
+
+        if zoom_to_minimum:
+            min_show = min(opt_E, -0.1)
+            mask = np.abs(interp_y) <= abs(min_show)
+
+            interp_x = interp_x[mask]
+            interp_y = interp_y[mask]
 
         axs.plot(
             interp_x,
