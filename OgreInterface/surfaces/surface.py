@@ -114,7 +114,7 @@ class Surface(BaseSurface):
         )
 
     @property
-    def top_surface_charge(self) -> float:
+    def bottom_surface_charge(self) -> float:
         frac_coords = self.oriented_bulk_structure.frac_coords
         mod_frac_coords = np.mod(np.round(frac_coords[:, -1], 5), 1.0)
         mod_frac_coords += 1.0 - mod_frac_coords.max()
@@ -128,7 +128,7 @@ class Surface(BaseSurface):
         return np.round((charges * z_frac).sum(), 4)
 
     @property
-    def bottom_surface_charge(self) -> float:
+    def top_surface_charge(self) -> float:
         frac_coords = self.oriented_bulk_structure.frac_coords
 
         mod_frac_coords = np.mod(np.round(frac_coords[:, -1], 5), 1.0)
