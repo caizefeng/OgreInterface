@@ -658,8 +658,8 @@ class BaseInterfaceSearch(ABC):
 
         run_data = {
             "bulkData": {
-                "substrateBulk": self._substrate_bulk.to_json(),
-                "filmBulk": self._film_bulk.to_json(),
+                "substrateBulk": self._substrate_bulk.as_dict(),
+                "filmBulk": self._film_bulk.as_dict(),
             },
             "optData": {
                 "filmMillerIndex": film_miller,

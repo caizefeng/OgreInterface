@@ -372,7 +372,8 @@ class BaseSurfaceGenerator(Sequence):
             layers=self.layers,
             vacuum_scale=vacuum_scale,
         )
-        non_orthogonal_slab.sort()
+        utils.sort_slab(non_orthogonal_slab)
+        # non_orthogonal_slab.sort()
 
         # Center the surfaces within the vacuum region by shifting along c
         center_shift = 0.5 * (vacuum_scale / (vacuum_scale + self.layers))
@@ -441,6 +442,7 @@ class BaseSurfaceGenerator(Sequence):
         surfaces = []
 
         sorted_surface_keys = sorted(surface_keys, key=lambda x: x[0])
+
         groups = groupby(sorted_surface_keys, key=lambda x: x[0])
 
         unique_inds = []
