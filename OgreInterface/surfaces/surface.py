@@ -276,7 +276,7 @@ class Surface(BaseSurface):
         self,
         site,
         coordination,
-        include_d_valence: bool = True,
+        include_d_valence: bool = False,
         manual_oxidation_states: Union[Dict[str, float], None] = None,
     ) -> float:
         electronic_struc = site.specie.electronic_structure.split(".")[1:]
@@ -291,16 +291,18 @@ class Surface(BaseSurface):
         valence = 0
         for orb in electronic_struc:
             if include_d_valence:
-                if orb[1] == "d":
-                    if int(orb[2:]) < 10:
+                if orb[1] != "f":
+                    if orb[1] == "d":
+                        if int(orb[2:]) < 10:
+                            valence += int(orb[2:])
+                    else:
                         valence += int(orb[2:])
-                else:
-                    valence += int(orb[2:])
             else:
-                if orb[1] != "d":
-                    valence += int(orb[2:])
+                if orb[1] != "f":
+                    if orb[1] != "d":
+                        valence += int(orb[2:])
 
-        if oxi_state < 0:
+        if oxi_state > 0:
             charge = (8 - valence) / coordination
         else:
             charge = ((2 * coordination) - valence) / coordination
@@ -757,7 +759,7 @@ class Surface(BaseSurface):
         top: bool = True,
         cutoff: float = 4.0,
         passivated_struc: Union[str, None] = None,
-        include_d_valence: bool = True,
+        include_d_valence: bool = False,
         manual_oxidation_states: Union[Dict[str, float], None] = None,
     ) -> None:
         """
