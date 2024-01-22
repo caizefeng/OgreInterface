@@ -304,10 +304,16 @@ class BaseInterfaceSearch(ABC):
             data["pesFigure"] = stream_PES_base64
 
             if not self._app_mode:
-                with open(join(interface_dir, "PES_opt.png"), "wb") as f:
+                with open(
+                    join(
+                        interface_dir,
+                        f"PES_opt_film{film_ind:02d}_sub{sub_ind:02d}.png",
+                    ),
+                    "wb",
+                ) as f:
                     f.write(stream_PES_value)
 
-        surface_matcher.get_optimized_structure()
+            # surface_matcher.get_optimized_structure()
 
         if not self._fast_mode:
             stream_z_shift = io.BytesIO()
@@ -330,10 +336,16 @@ class BaseInterfaceSearch(ABC):
             data["zShiftFigure"] = stream_z_shift_base64
 
             if not self._app_mode:
-                with open(join(interface_dir, "z_shift.png"), "wb") as f:
+                with open(
+                    join(
+                        interface_dir,
+                        f"z_shift_film{film_ind:02d}_sub{sub_ind:02d}.png",
+                    ),
+                    "wb",
+                ) as f:
                     f.write(stream_z_shift_value)
 
-        surface_matcher.get_optimized_structure()
+            # surface_matcher.get_optimized_structure()
 
         opt_d = interface.interfacial_distance
         a_shift = np.mod(interface._a_shift, 1.0)
