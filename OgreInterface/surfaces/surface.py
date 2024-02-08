@@ -279,10 +279,11 @@ class Surface(BaseSurface):
         include_d_valence: bool = False,
         manual_oxidation_states: Union[Dict[str, float], None] = None,
         manual_valence_electrons: Union[Dict[str, float], None] = None,
-    ) -> float:
+    ) -> Tuple[float, list]:
         electronic_struc = site.specie.electronic_structure.split(".")[1:]
 
         species_str = str(site.specie._el)
+        warning_messages = []
 
         if manual_oxidation_states:
             oxi_state = manual_oxidation_states[species_str]
@@ -313,6 +314,10 @@ class Surface(BaseSurface):
                         if orb[1] != "d":
                             if orb != "6s2":
                                 valence += int(orb[2:])
+                            else:
+                                warning_messages.append(f"NOTE: For {species_str}, 6s2 electrons are not considered "
+                                                        f"valence electrons due to the inert pair effect.")
+            warning_messages.append(f"{species_str}: Valence electron count set to {valence}.")
         else:
             valence = manual_valence
 
@@ -343,7 +348,7 @@ class Surface(BaseSurface):
         min_diff = np.isclose(closest_charge, closest_charge.min())
         charge = np.min(available_charges[min_diff])
 
-        return charge
+        return charge, warning_messages
 
     def _get_bond_dict(
         self,
@@ -361,6 +366,9 @@ class Surface(BaseSurface):
         labels = ["bottom", "top"]
         bond_dict = {"bottom": {}, "top": {}}
         H_len = 0.31
+
+        # list of warning messages for PH charge determination
+        charge_warning_messages = []
 
         for i, neighborhood in enumerate(surface_neighborhoods):
             for surface_atom in neighborhood:
@@ -381,13 +389,14 @@ class Surface(BaseSurface):
                 ]
                 neighbor_info = surface_atom[1]
                 coordination = len(neighbor_info)
-                charge = self._get_pseudohydrogen_charge(
+                charge, warning_messages = self._get_pseudohydrogen_charge(
                     layer_struc[atom_index],
                     coordination,
                     include_d_valence,
                     manual_oxidation_states,
                     manual_valence_electrons,
                 )
+                charge_warning_messages.extend(warning_messages)
                 broken_atoms = [
                     neighbor
                     for neighbor in neighbor_info
@@ -427,6 +436,18 @@ class Surface(BaseSurface):
                     "bond_strings": bond_strs,
                     "charge": charge,
                 }
+
+        if manual_valence_electrons is None:
+            print("----------------------------------------------------------")
+            print("WARNING: No valence electrons are manually specified.")
+            print("OgreInterface will default to the most common configuration.")
+            print("Verify correctness before proceeding.")
+            # Remove duplicates while reordering the list (using short-circuit evaluation)
+            seen = set()
+            reordered_no_duplicates = [x for x in sorted(charge_warning_messages, key=lambda x: (x.startswith("NOTE"), x)) if
+                                       x not in seen and not seen.add(x)]
+            print("\n".join(reordered_no_duplicates))
+            print("----------------------------------------------------------")
 
         return bond_dict
 
@@ -803,6 +824,8 @@ class Surface(BaseSurface):
             manual_oxidation_states:  (DO NOT CHANGE FROM DEFAULT, THIS IS ONLY FOR DEBUGING) Option to pass in a dictionary determining which elements are anions vs cations.
                 This will be automated hopefully at some point.
                 (i.e {"Ti": 1, "Mn": 1, "In": -1} would mean Ti and Mn are cations and In is an anion)
+            manual_valence_electrons: Determines the number of valence electrons for each element on the surface.
+                {"Pb": 2, "Te": 6} would mean the Pb has 2 valence electrons and Te has 6 valence electrons.
         """
         bond_dict = self._get_bond_dict(
             cutoff,
