@@ -278,31 +278,45 @@ class Surface(BaseSurface):
         coordination,
         include_d_valence: bool = False,
         manual_oxidation_states: Union[Dict[str, float], None] = None,
+        manual_valence_electrons: Union[Dict[str, float], None] = None,
     ) -> float:
         electronic_struc = site.specie.electronic_structure.split(".")[1:]
 
-        # TODO automate anion/cation determination
+        species_str = str(site.specie._el)
+
         if manual_oxidation_states:
-            species_str = str(site.specie._el)
             oxi_state = manual_oxidation_states[species_str]
         else:
             oxi_state = site.specie.oxi_state
 
-        valence = 0
-        for orb in electronic_struc:
-            if include_d_valence:
-                if orb[1] != "f":
-                    if orb[1] == "d":
-                        if int(orb[2:]) < 10:
-                            valence += int(orb[2:])
-                    else:
-                        valence += int(orb[2:])
+        if manual_valence_electrons is not None:
+            if species_str in manual_valence_electrons:
+                manual_valence = manual_valence_electrons[species_str]
             else:
-                if orb[1] != "f":
-                    if orb[1] != "d":
-                        valence += int(orb[2:])
+                manual_valence = None
+        else:
+            manual_valence = None
 
-        if oxi_state > 0:
+        if manual_valence is None:
+            valence = 0
+            for orb in electronic_struc:
+                if include_d_valence:
+                    if orb[1] != "f":
+                        if orb[1] == "d":
+                            if int(orb[2:]) < 10:
+                                valence += int(orb[2:])
+                        else:
+                            if orb != "6s2":
+                                valence += int(orb[2:])
+                else:
+                    if orb[1] != "f":
+                        if orb[1] != "d":
+                            if orb != "6s2":
+                                valence += int(orb[2:])
+        else:
+            valence = manual_valence
+
+        if oxi_state < 0:
             charge = (8 - valence) / coordination
         else:
             charge = ((2 * coordination) - valence) / coordination
@@ -336,6 +350,7 @@ class Surface(BaseSurface):
         cutoff: float,
         include_d_valence: bool,
         manual_oxidation_states,
+        manual_valence_electrons,
     ) -> Dict[str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]]:
         image_map = {1: "+", 0: "=", -1: "-"}
         (
@@ -371,6 +386,7 @@ class Surface(BaseSurface):
                     coordination,
                     include_d_valence,
                     manual_oxidation_states,
+                    manual_valence_electrons,
                 )
                 broken_atoms = [
                     neighbor
@@ -671,9 +687,10 @@ class Surface(BaseSurface):
             ideal_hydrogens = layer_struc.frac_coords[hydrogen_index]
 
             # Substract the bond center positions from the hydrogen positions to get only the bond vector
-            relaxed_hydrogens -= relaxed_bond_centers
-            ideal_hydrogens -= ideal_bond_centers
+            relaxed_hydrogens[:, -1] -= relaxed_bond_centers[:, -1]
+            ideal_hydrogens[:, -1] -= ideal_bond_centers[:, -1]
 
+            # TODO: Fix passivation issue
             relaxed_hydrogens_ref = np.mod(relaxed_hydrogens, 1.0)
             ideal_hydrogens_ref = np.mod(ideal_hydrogens, 1.0)
 
@@ -693,6 +710,7 @@ class Surface(BaseSurface):
 
                 # Get the bond string of the hydrogen
                 bond_str = bond_strs[H_ind].split(",")
+                # print(bond_str)
 
                 # Extract the side from the bond string (the last element)
                 side = top_bot_dict[int(bond_str[-1])]
@@ -761,6 +779,7 @@ class Surface(BaseSurface):
         passivated_struc: Union[str, None] = None,
         include_d_valence: bool = False,
         manual_oxidation_states: Union[Dict[str, float], None] = None,
+        manual_valence_electrons: Union[Dict[str, float], None] = None,
     ) -> None:
         """
         This function will apply pseudohydrogen passivation to all broken bonds on the surface and assign charges to the pseudo-hydrogens based
@@ -786,12 +805,16 @@ class Surface(BaseSurface):
                 (i.e {"Ti": 1, "Mn": 1, "In": -1} would mean Ti and Mn are cations and In is an anion)
         """
         bond_dict = self._get_bond_dict(
-            cutoff, include_d_valence, manual_oxidation_states
+            cutoff,
+            include_d_valence,
+            manual_oxidation_states,
+            manual_valence_electrons,
         )
 
         if passivated_struc is not None:
             bond_dict = self._get_passivated_bond_dict(
-                bond_dict=bond_dict, relaxed_structure_file=passivated_struc
+                bond_dict=bond_dict,
+                relaxed_structure_file=passivated_struc,
             )
 
         ortho_slab = self._orthogonal_slab_structure.copy()
