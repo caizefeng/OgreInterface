@@ -577,9 +577,20 @@ class Surface(BaseSurface):
                 ab_norm = np.linalg.norm(ab_coords, axis=1)
                 c_coords = frac_coords[:, -1]
 
-                ref_mask = (c_coords == c_coords.max()) & (
-                    ab_norm == ab_norm.min()
-                )
+                # Define the effective zero threshold
+                effective_zero_threshold = 1e-14
+
+                # Determine if the absolute minimum is effectively zero
+                if np.any(np.abs(ab_norm) <= effective_zero_threshold):
+                    # If the minimum value is effectively zero, return all indices of values that are effectively zero
+                    ref_mask = (c_coords == c_coords.max()) & (
+                            np.abs(ab_norm) <= effective_zero_threshold
+                    )
+                else:
+                    # If the minimum value is not effectively zero, return the index of the true minimum
+                    ref_mask = (c_coords == c_coords.max()) & (
+                            ab_norm == ab_norm.min()
+                    )
 
                 ref_ind = np.where(ref_mask)[0][0]
 
