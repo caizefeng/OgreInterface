@@ -201,7 +201,7 @@ class MillerSearch(object):
         labelrotation: float = -20.0,
         substrate_label: Union[str, None] = None,
         film_label: Union[str, None] = None,
-        show_in_colab: bool = False,
+        display_results: bool = False,
     ) -> None:
         """
         Plot the results of the miller index scan.
@@ -218,8 +218,8 @@ class MillerSearch(object):
             labelrotation: Determines how much the labels on the x-axis should be rotated. This is usefull to avoid overlapping labels
             substrate_label: If none, this is automatically determined using the reduced formula of the bulk structure
             film_label: If none, this is automatically determined using the reduced formula of the bulk structure
-            show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
-                if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
+            display_results: Determines if the matplotlib figure is closed or not after the plot if made.
+                if display_results=True the plot will show up after you run the cell in colab/jupyter notebook.
         """
         ylabels = []
         for ylabel in self.film_inds:
@@ -314,7 +314,7 @@ class MillerSearch(object):
         fig.tight_layout(pad=0.4)
         fig.savefig(output, bbox_inches="tight", transparent=False)
 
-        if not show_in_colab:
+        if not display_results:
             plt.close(fig)
 
 

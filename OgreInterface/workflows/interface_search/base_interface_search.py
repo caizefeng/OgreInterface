@@ -247,6 +247,8 @@ class BaseInterfaceSearch(ABC):
         data = {
             "filmIndex": int(film_ind),
             "substrateIndex": int(sub_ind),
+            "filmSurfaceCharge": float(film.bottom_surface_charge),
+            "substrateSurfaceCharge": float(sub.top_surface_charge),
         }
 
         interface_dir = join(base_dir, f"film{film_ind:02d}_sub{sub_ind:02d}")
@@ -290,6 +292,42 @@ class BaseInterfaceSearch(ABC):
         opt_d_pso = interface.interfacial_distance
 
         if not self._fast_mode:
+            z_shift_raw_data_path = join(
+                interface_dir,
+                f"z_shift_film{film_ind:02d}_sub{sub_ind:02d}.npz",
+            )
+            stream_z_shift = io.BytesIO()
+            surface_matcher.run_z_shift(
+                interfacial_distances=np.linspace(
+                    max(min_z, opt_d_pso - 2.0),
+                    min(opt_d_pso + 2.0, max_z),
+                    31,
+                ),
+                output=stream_z_shift,
+                dpi=self._dpi,
+                zoom_to_minimum=True,
+                save_raw_data_file=z_shift_raw_data_path,
+            )
+            surface_matcher.get_optimized_structure()
+
+            stream_z_shift_value = stream_z_shift.getvalue()
+            stream_z_shift_base64 = base64.b64encode(
+                stream_z_shift_value
+            ).decode()
+
+            data["zShiftFigure"] = stream_z_shift_base64
+
+            if not self._app_mode:
+                with open(
+                    join(
+                        interface_dir,
+                        f"z_shift_film{film_ind:02d}_sub{sub_ind:02d}.png",
+                    ),
+                    "wb",
+                ) as f:
+                    f.write(stream_z_shift_value)
+
+        if not self._fast_mode:
             stream_PES = io.BytesIO()
             surface_matcher.run_surface_matching(
                 output=stream_PES,
@@ -312,40 +350,6 @@ class BaseInterfaceSearch(ABC):
                     "wb",
                 ) as f:
                     f.write(stream_PES_value)
-
-            # surface_matcher.get_optimized_structure()
-
-        if not self._fast_mode:
-            stream_z_shift = io.BytesIO()
-            surface_matcher.run_z_shift(
-                interfacial_distances=np.linspace(
-                    max(min_z, opt_d_pso - 2.0),
-                    min(opt_d_pso + 2.0, max_z),
-                    31,
-                ),
-                output=stream_z_shift,
-                dpi=self._dpi,
-                zoom_to_minimum=True,
-            )
-
-            stream_z_shift_value = stream_z_shift.getvalue()
-            stream_z_shift_base64 = base64.b64encode(
-                stream_z_shift_value
-            ).decode()
-
-            data["zShiftFigure"] = stream_z_shift_base64
-
-            if not self._app_mode:
-                with open(
-                    join(
-                        interface_dir,
-                        f"z_shift_film{film_ind:02d}_sub{sub_ind:02d}.png",
-                    ),
-                    "wb",
-                ) as f:
-                    f.write(stream_z_shift_value)
-
-            # surface_matcher.get_optimized_structure()
 
         opt_d = interface.interfacial_distance
         a_shift = np.mod(interface._a_shift, 1.0)
@@ -398,6 +402,7 @@ class BaseInterfaceSearch(ABC):
         data["substrateTerminationComp"] = substrate_termination
         data["area"] = interface.area
         data["strain"] = 100 * interface.match.strain
+        data["converged"] = bool(opt_d < 0.99 * max_z)
 
         return data
 
@@ -587,13 +592,12 @@ class BaseInterfaceSearch(ABC):
             [
                 "filmIndex",
                 "substrateIndex",
-                "interfaceEnergy",
-                "adhesionEnergy",
-                "aShift",
-                "bShift",
                 "interfacialDistance",
-                "filmSurfaceEnergy",
-                "substrateSurfaceEnergy",
+                "filmSurfaceCharge",
+                "substrateSurfaceCharge",
+                "adhesionEnergy",
+                "interfaceEnergy",
+                "converged",
             ]
         ]
 
