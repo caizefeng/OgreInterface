@@ -65,6 +65,8 @@ class BaseInterfaceSearch(ABC):
         film_bulk: tp.Union[Structure, Atoms, str],
         substrate_miller_index: tp.List[int],
         film_miller_index: tp.List[int],
+        refine_substrate: bool = False,
+        refine_film: bool = False,
         surface_matching_kwargs: tp.Dict[str, tp.Any] = {},
         surface_energy_kwargs: tp.Dict[str, tp.Any] = {},
         minimum_slab_thickness: float = 18.0,
@@ -73,7 +75,6 @@ class BaseInterfaceSearch(ABC):
         max_area_mismatch: tp.Optional[float] = None,
         max_area: tp.Optional[float] = None,
         substrate_strain_fraction: float = 0.0,
-        refine_structure: bool = True,
         suppress_warnings: bool = True,
         n_particles_PSO: int = 20,
         max_iterations_PSO: int = 150,
@@ -86,6 +87,7 @@ class BaseInterfaceSearch(ABC):
         dpi: int = 400,
         verbose: bool = True,
         fast_mode: bool = True,
+        interface_index: int = 0,
     ):
         if n_workers > 1:
             self._verbose = False
@@ -98,34 +100,37 @@ class BaseInterfaceSearch(ABC):
         self.surface_generator = surface_generator
         self.surface_matching_kwargs = surface_matching_kwargs
         self.surface_energy_kwargs = surface_energy_kwargs
-        self._refine_structure = refine_structure
+        self._refine_substrate = refine_substrate
+        self._refine_film = refine_film
         self._suppress_warnings = suppress_warnings
         self.n_workers = n_workers
         self._app_mode = app_mode
         self._dpi = dpi
+        self._interface_index = interface_index
+
         if type(substrate_bulk) is str:
             self._substrate_bulk = utils.load_bulk(
                 atoms_or_structure=Structure.from_file(substrate_bulk),
-                refine_structure=self._refine_structure,
+                refine_structure=self._refine_substrate,
                 suppress_warnings=self._suppress_warnings,
             )
         else:
             self._substrate_bulk = utils.load_bulk(
                 atoms_or_structure=substrate_bulk,
-                refine_structure=self._refine_structure,
+                refine_structure=self._refine_substrate,
                 suppress_warnings=self._suppress_warnings,
             )
 
         if type(film_bulk) is str:
             self._film_bulk = utils.load_bulk(
                 atoms_or_structure=Structure.from_file(film_bulk),
-                refine_structure=self._refine_structure,
+                refine_structure=self._refine_film,
                 suppress_warnings=self._suppress_warnings,
             )
         else:
             self._film_bulk = utils.load_bulk(
                 atoms_or_structure=film_bulk,
-                refine_structure=self._refine_structure,
+                refine_structure=self._refine_film,
                 suppress_warnings=self._suppress_warnings,
             )
 
@@ -151,7 +156,7 @@ class BaseInterfaceSearch(ABC):
             layers=None,
             minimum_thickness=self._minimum_slab_thickness,
             vacuum=40.0,
-            refine_structure=self._refine_structure,
+            refine_structure=self._refine_substrate,
         )
 
         film_generator = self.surface_generator(
@@ -160,7 +165,7 @@ class BaseInterfaceSearch(ABC):
             layers=None,
             minimum_thickness=self._minimum_slab_thickness,
             vacuum=40.0,
-            refine_structure=True,
+            refine_structure=self._refine_film,
         )
 
         return substrate_generator, film_generator
@@ -550,10 +555,15 @@ class BaseInterfaceSearch(ABC):
             )
 
             # Generate the interfaces
+            if self._interface_index > 0:
+                generate_all = True
+            else:
+                generate_all = False
+
             ifaces = interface_generator.generate_interfaces(
-                generate_all=False
+                generate_all=generate_all
             )
-            iface = ifaces[0]
+            iface = ifaces[self._interface_index]
 
             interfaces.append(iface)
 
