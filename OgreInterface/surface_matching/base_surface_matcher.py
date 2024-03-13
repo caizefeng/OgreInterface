@@ -479,9 +479,9 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
         interface_energy = np.c_[unique_energies, unique_energies[:, 0]]
         interface_energy = np.vstack([interface_energy, interface_energy[0]])
 
-        x_grid = np.linspace(0, 1, self.grid_density_x)
-        y_grid = np.linspace(0, 1, self.grid_density_y)
-        X, Y = np.meshgrid(x_grid, y_grid)
+        # x_grid = np.linspace(0, 1, self.grid_density_x)
+        # y_grid = np.linspace(0, 1, self.grid_density_y)
+        # X, Y = np.meshgrid(x_grid, y_grid)
 
         Z = (interface_energy - sub_energy - film_energy) / self.interface.area
 
@@ -492,23 +492,12 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
         b = self.matrix[1, :2]
 
         borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+        borders -= (a + b) / 2
 
-        x_size = borders[:, 0].max() - borders[:, 0].min()
-        y_size = borders[:, 1].max() - borders[:, 1].min()
+        fig, ax, square_length = self._get_figure_for_PES(padding=0.1, dpi=dpi)
+        grid = np.linspace(-square_length / 2, square_length / 2, 501)
 
-        ratio = y_size / x_size
-
-        if ratio < 1:
-            figx = 5 / ratio
-            figy = 5
-        else:
-            figx = 5
-            figy = 5 * ratio
-
-        fig, ax = plt.subplots(
-            figsize=(figx, figy),
-            dpi=dpi,
-        )
+        X_plot, Y_plot = np.meshgrid(grid, grid)
 
         ax.plot(
             borders[:, 0],
@@ -521,8 +510,8 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
         max_Z = self._plot_surface_matching(
             fig=fig,
             ax=ax,
-            X=X,
-            Y=Y,
+            X_plot=X_plot,
+            Y_plot=Y_plot,
             Z=Z,
             dpi=dpi,
             cmap=cmap,
@@ -533,8 +522,6 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
             shift=True,
         )
 
-        ax.set_xlim(borders[:, 0].min(), borders[:, 0].max())
-        ax.set_ylim(borders[:, 1].min(), borders[:, 1].max())
         ax.set_aspect("equal")
 
         fig.tight_layout()
