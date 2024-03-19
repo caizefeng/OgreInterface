@@ -55,7 +55,8 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         max_area_mismatch: tp.Optional[float] = None,
         max_area: tp.Optional[float] = None,
         substrate_strain_fraction: float = 0.0,
-        refine_structure: bool = True,
+        refine_substrate: bool = False,
+        refine_film: bool = False,
         suppress_warnings: bool = True,
         n_particles_PSO: int = 20,
         max_iterations_PSO: int = 150,
@@ -70,6 +71,7 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         dpi: int = 400,
         verbose: bool = True,
         fast_mode: bool = False,
+        interface_index: int = 0,
     ):
         surface_matching_kwargs = {
             "auto_determine_born_n": auto_determine_born_n,
@@ -91,7 +93,8 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
             max_area_mismatch=max_area_mismatch,
             max_area=max_area,
             substrate_strain_fraction=substrate_strain_fraction,
-            refine_structure=refine_structure,
+            refine_substrate=refine_substrate,
+            refine_film=refine_film,
             suppress_warnings=suppress_warnings,
             n_particles_PSO=n_particles_PSO,
             max_iterations_PSO=max_iterations_PSO,
@@ -104,6 +107,7 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
             dpi=dpi,
             verbose=verbose,
             fast_mode=fast_mode,
+            interface_index=interface_index,
         )
 
     def _get_film_and_substrate_inds(

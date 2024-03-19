@@ -74,7 +74,7 @@ class ZurMcGill:
         max_area: Optional[float] = None,
         max_strain: float = 0.01,
         max_area_mismatch: Optional[float] = None,
-        max_area_scale_factor: float = 4.1,
+        max_area_scale_factor: float = 2.05,
     ) -> None:
         self.film_vectors = film_vectors
         self.film_basis = film_basis

@@ -10,10 +10,12 @@ from OgreInterface.plotting_tools import plotting_utils
 def plot_match(
     match: OgreMatch,
     padding: float = 0.2,
-    substrate_color: str = "orange",
-    film_color: str = "green",
+    substrate_color: str = "green",
+    film_color: str = "orange",
+    substrate_label: str = "A",
+    film_label: str = "B",
     output: str = "interface_view.png",
-    show_in_colab: bool = False,
+    display_results: bool = False,
     dpi: int = 400,
 ):
     strain_matrix = match.film_to_substrate_strain_transform[:2, :2]
@@ -251,11 +253,11 @@ def plot_match(
         [
             f"{int(match.film_sl_scale_factors[0])}",
             film_sc_a_label,
-            "_{F}",
+            "_{" + film_label + "}",
             "||",
             f"{int(match.substrate_sl_scale_factors[0])}",
             sub_sc_a_label,
-            "_{S}",
+            "_{" + substrate_label + "}",
         ]
     )
 
@@ -263,11 +265,11 @@ def plot_match(
         [
             f"{int(match.film_sl_scale_factors[1])}",
             film_sc_b_label,
-            "_{F}",
+            "_{" + film_label + "}",
             "||",
             f"{int(match.substrate_sl_scale_factors[1])}",
             sub_sc_b_label,
-            "_{S}",
+            "_{" + substrate_label + "}",
         ]
     )
 
@@ -385,7 +387,7 @@ def plot_match(
         fontsize=12,
         linewidth=1.0,
         zorder=310,
-        part="_{S}",
+        part="_{" + substrate_label + "}",
     )
 
     film_a_label = plotting_utils._get_miller_label(match.film_basis[0])
@@ -401,13 +403,13 @@ def plot_match(
         fontsize=12,
         linewidth=1.0,
         zorder=310,
-        part="_{F}",
+        part="_{" + film_label + "}",
     )
 
     fig.tight_layout(pad=0.5)
     fig.savefig(output, transparent=False)
 
-    if not show_in_colab:
+    if not display_results:
         plt.close(fig)
 
 

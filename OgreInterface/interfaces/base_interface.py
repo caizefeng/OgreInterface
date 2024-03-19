@@ -1315,9 +1315,11 @@ class BaseInterface(ABC):
         self,
         output: str = "interface_view.png",
         dpi: int = 400,
-        film_color: str = "green",
-        substrate_color: str = "orange",
-        show_in_colab: bool = False,
+        film_color: str = "orange",
+        substrate_color: str = "green",
+        film_label: str = "B",
+        substrate_label: str = "A",
+        display_results: bool = False,
     ) -> None:
         """
         This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
@@ -1328,16 +1330,20 @@ class BaseInterface(ABC):
                 Setting dpi=100 gives reasonably sized images when viewed in colab notebook
             film_color: Color to represent the film lattice vectors
             substrate_color: Color to represent the substrate lattice vectors
-            show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
-                if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
+            film_label: Label in the subscript of the match figure. (A/B) or (S/F) are common
+            substrate_label: Label in the subscript of the match figure. (A/B) or (S/F) are common
+            display_results: Determines if the matplotlib figure is closed or not after the plot if made.
+                if display_results=True the plot will show up after you run the cell in colab/jupyter notebook.
         """
         plot_match(
             match=self.match,
             padding=0.2,
             substrate_color=substrate_color,
             film_color=film_color,
+            substrate_label=substrate_label,
+            film_label=film_label,
             output=output,
-            show_in_colab=show_in_colab,
+            display_results=display_results,
         )
 
     def _get_base_poscar_comment_str(self, orthogonal: bool):
