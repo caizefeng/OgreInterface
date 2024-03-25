@@ -12,16 +12,77 @@ from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.io.vasp.inputs import Poscar
-from pymatgen.core.periodic_table import DummySpecies
+from pymatgen.core.periodic_table import DummySpecies, Element
 from pymatgen.analysis.graphs import StructureGraph
 from pymatgen.analysis.local_env import JmolNN
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
 from ase import Atoms
+from ase.data import covalent_radii, chemical_symbols
 import numpy as np
 import networkx as nx
+import pandas as pd
 import spglib
+
+
+from OgreInterface.data.ionic_radii import ionic_radii_df
+
+
+def estimate_atomic_radius(
+    atomic_number: int,
+    charge: int,
+    coordination: int,
+    is_elemental: bool,
+):
+    if charge > 0:
+        # Query the IONIC_RADII_DF to get potential radii based on
+        # oxidation state and atomic number
+        z_df = ionic_radii_df[
+            (ionic_radii_df["Atomic Number"] == atomic_number)
+            & (ionic_radii_df["Oxidation State"] == charge)
+        ]
+
+        # If there is more than one option then get the radius that
+        # best matches the coordination number of the given site
+        if len(z_df) > 0:
+            # Get radius with closest coordination number
+            z_coords = z_df["Coordination Number"].values
+            z_coord_diff = np.abs(z_coords - coordination)
+            z_coord_mask = z_coord_diff == z_coord_diff.min()
+            z_radii = z_df[z_coord_mask]
+
+            if not pd.isna(z_radii["Shannon"]).any():
+                # If there is a shannon radius value use that
+                radius = z_radii["Shannon"].values.mean() / 100
+            else:
+                # otherwise use the ML mean value
+                radius = z_radii["ML Mean"].values.mean() / 100
+        else:
+            # If there are no entries use the covalent radius
+            radius = covalent_radii[atomic_number]
+    else:
+        if is_elemental:
+            if coordination > 4:
+                # Get metalic radius
+                radius = Element(
+                    chemical_symbols[atomic_number]
+                ).metallic_radius
+            else:
+                radius = covalent_radii[atomic_number]
+        else:
+            if coordination > 4:
+                # Average between metallic and covalent
+                metallic_radius = Element(
+                    chemical_symbols[atomic_number]
+                ).metallic_radius
+                covalent_radius = covalent_radii[atomic_number]
+
+                radius = 0.5 * (metallic_radius + covalent_radius)
+            else:
+                radius = covalent_radii[atomic_number]
+
+    return radius
 
 
 def sort_slab(structure: Structure) -> None:
