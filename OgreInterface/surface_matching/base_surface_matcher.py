@@ -10,6 +10,7 @@ from matplotlib.cm import ScalarMappable
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.interpolate import RectBivariateSpline, CubicSpline
+from scipy.optimize import basinhopping, OptimizeResult
 import numpy as np
 from sko.PSO import PSO
 from sko.tools import set_run_mode
@@ -156,7 +157,7 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
         self.grid_density = grid_density
 
         # Get the matrix used to determine the shifts (smallest surface area)
-        self.shift_matrix = self._get_shift_matrix()
+        self.shift_matrix, self.inv_shift_matrix = self._get_shift_matrix()
 
         # Generate the shifts for the 2D PES
         self.shifts = self._generate_shifts()
@@ -354,11 +355,17 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
 
     #     return cost, pos
 
-    def _get_shift_matrix(self) -> np.ndarray:
+    def _get_shift_matrix(self) -> tp.Tuple[np.ndarray, np.ndarray]:
         if self.interface.substrate.area < self.interface.film.area:
-            return copy.deepcopy(self.sub_obs.lattice.matrix)
+            return (
+                copy.deepcopy(self.sub_obs.lattice.matrix),
+                copy.deepcopy(self.sub_obs.lattice.inv_matrix),
+            )
         else:
-            return copy.deepcopy(self.film_obs.lattice.matrix)
+            return (
+                copy.deepcopy(self.film_obs.lattice.matrix),
+                copy.deepcopy(self.film_obs.lattice.inv_matrix),
+            )
 
     def _generate_shifts(self) -> tp.List[np.ndarray]:
         grid_density_x = int(
@@ -638,6 +645,8 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
         show_max,
         scale_data,
         add_color_bar,
+        show_opt,
+        opt_shift,
     ):
         ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
         ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
@@ -696,6 +705,20 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
             levels=200,
             norm=norm,
         )
+
+        mod_opt_shift = opt_shift - np.round(opt_shift)
+        cart_opt_shift = mod_opt_shift.dot(self.matrix[:2, :2])
+
+        if show_opt:
+            ax.scatter(
+                [cart_opt_shift[0]],
+                [cart_opt_shift[1]],
+                marker="X",
+                ec="black",
+                fc="white",
+                s=30,
+                zorder=100,
+            )
 
         if add_color_bar:
             divider = make_axes_locatable(ax)
@@ -767,6 +790,56 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
 
         return spline
 
+    # def _get_optimal_point_from_spline(
+    #     self,
+    #     spline: RectBivariateSpline,
+    # ) -> tp.Tuple[float, np.ndarray]:
+    #     planar_matrix = self.shift_matrix[:2, :2]
+
+    #     x_min = planar_matrix[:, 0].min()
+    #     x_max = planar_matrix[:, 0].max()
+
+    #     y_min = planar_matrix[:, 1].min()
+    #     y_max = planar_matrix[:, 1].max()
+
+    #     fmin = basinhopping(
+    #         lambda x: spline(x[0], x[1]),
+    #         x0=np.zeros(2),
+    #         # minimizer_kwargs={"bounds": [(x_min, x_max), (y_min, y_max)]},
+    #     )
+
+    #     min_val = fmin.fun
+    #     # opt_position = np.array([fmin.x[1], fmin.x[0]])
+    #     # min_frac_position = np.mod(
+    #     #     np.round(opt_position.dot(self.inv_matrix[:2, :2]), 6),
+    #     #     1.0,
+    #     # )
+
+    #     return min_val, fmin.x
+
+    def _get_optimal_point(
+        self,
+        X: np.ndarray,
+        Y: np.ndarray,
+        Z: np.ndarray,
+    ) -> tp.Tuple[float, np.ndarray]:
+        opt_x, opt_y = np.where(Z == Z.min())
+        opt_x = opt_x[0]
+        opt_y = opt_y[0]
+        min_x = X[opt_x, opt_y]
+        min_y = Y[opt_x, opt_y]
+        min_val = Z.min()
+
+        min_point = np.array([min_x, min_y, 0.0])
+        min_frac_shift_point = np.mod(
+            np.round(min_point.dot(self.inv_shift_matrix), 6), 1.0
+        )
+        min_frac_point = min_frac_shift_point.dot(self.shift_matrix).dot(
+            self.inv_matrix
+        )
+
+        return min_val, min_frac_point[:2]
+
     def _plot_surface_matching(
         self,
         fig,
@@ -783,11 +856,22 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
         shift,
     ):
         spline = self._get_spline(Z=Z)
+
         Z_plot = self._evaluate_spline(
             spline=spline,
             X=X_plot,
             Y=Y_plot,
         )
+
+        opt_val, opt_shift = self._get_optimal_point(
+            X=X_plot,
+            Y=Y_plot,
+            Z=Z_plot,
+        )
+
+        if shift:
+            self.opt_xy_shift = opt_shift
+
         self._plot_heatmap(
             fig=fig,
             ax=ax,
@@ -799,9 +883,11 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
             show_max=show_max,
             scale_data=scale_data,
             add_color_bar=True,
+            show_opt=show_shift,
+            opt_shift=opt_shift,
         )
 
-        return np.max(Z_plot)
+        return opt_val
 
     def run_surface_matching(
         self,
@@ -872,7 +958,7 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
 
         X_plot, Y_plot = np.meshgrid(grid, grid)
 
-        max_Z = self._plot_surface_matching(
+        opt_Z = self._plot_surface_matching(
             fig=fig,
             ax=ax,
             X_plot=X_plot,
@@ -901,7 +987,7 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
         fig.savefig(output, bbox_inches="tight", transparent=False)
         plt.close(fig)
 
-        return max_Z
+        return opt_Z
 
     def run_z_shift(
         self,
