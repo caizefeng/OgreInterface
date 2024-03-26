@@ -1,9 +1,11 @@
 import typing as tp
 
 import numpy as np
-from scipy.special import erfc
 
-from OgreInterface.surface_matching.ionic_surface_matcher.scatter_add import (
+from OgreInterface.data.universal_lennard_jones_parameters import (
+    element_epsilons,
+)
+from OgreInterface.surface_matching.lj_surface_matcher.scatter_add import (
     scatter_add_bin,
 )
 
@@ -31,12 +33,12 @@ class LJPotential:
         self,
         inputs: tp.Dict[str, np.ndarray],
     ) -> tp.Dict[str, np.ndarray]:
-        epsilon = inputs["epsilon"]
         idx_m = inputs["idx_m"]
 
-        n_atoms = epsilon.shape[0]
-        n_molecules = int(idx_m[-1]) + 1
         z = inputs["Z"]
+
+        n_atoms = z.shape[0]
+        n_molecules = int(idx_m[-1]) + 1
         r0s = inputs["r0s"]
         idx_m = inputs["idx_m"]
         # e_negs = inputs["e_negs"]
@@ -53,15 +55,13 @@ class LJPotential:
         in_cutoff = distances <= self.cutoff
         idx_i = idx_i_all[in_cutoff]
         idx_j = idx_j_all[in_cutoff]
+        epsilon_i = element_epsilons[z[idx_i]].astype(np.float32)
+        epsilon_j = element_epsilons[z[idx_j]].astype(np.float32)
+
+        epsilon_ij = np.sqrt(epsilon_i * epsilon_j).astype(np.float32)
         d_ij = distances[in_cutoff]
 
         r0_ij = r0s[idx_i] + r0s[idx_j]
-        epsilon_ij = np.sqrt(epsilon[idx_i] * epsilon[idx_j]).astype(
-            np.float32
-        )
-        # e_diff_ij = 0.5 + (np.abs(e_negs[idx_i] - e_negs[idx_j]) / (2 * 3.19))
-        # zero_charge_mask = epsilon_ij_ij == 0
-        # q_ij[zero_charge_mask] -= e_diff_ij[zero_charge_mask]
 
         n_atoms = z.shape[0]
         n_molecules = int(idx_m[-1]) + 1
@@ -79,7 +79,6 @@ class LJPotential:
         epsilon_ij: np.ndarray,
         r0_ij: np.ndarray,
     ) -> np.ndarray:
-
         energy = (
             4
             * epsilon_ij

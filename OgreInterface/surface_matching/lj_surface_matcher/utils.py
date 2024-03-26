@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from OgreInterface import data
-from OgreInterface.surface_matching.ionic_surface_matcher.input_generator import (
+from OgreInterface.surface_matching.lj_surface_matcher.input_generator import (
     generate_input_dict,
 )
 from OgreInterface import utils
@@ -40,6 +40,29 @@ def add_shifts_to_batch(
         batch_inputs["R"] += all_shifts
     else:
         raise "_add_shifts_to_batch should only be used on interfaces that have the is_film property"
+
+
+def get_charges_from_structure(structure: Structure) -> tp.Dict[str, int]:
+    """
+    This function guesses the oxidation states from a given structure
+
+    Args:
+        structure: Input structure
+
+    Returns:
+        Dictionary of {symbol: charge}
+    """
+    oxi_guesses = structure.composition.oxi_state_guesses()
+
+    if len(oxi_guesses) > 0:
+        oxidation_states = oxi_guesses[0]
+    else:
+        unique_atomic_numbers = np.unique(structure.atomic_numbers)
+        oxidation_states = {
+            chemical_symbols[n]: 0 for n in unique_atomic_numbers
+        }
+
+    return oxidation_states
 
 
 def get_equivalent_site_to_atomic_number_mapping(
