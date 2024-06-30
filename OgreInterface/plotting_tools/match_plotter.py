@@ -1,3 +1,5 @@
+import typing as tp
+
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
 from matplotlib.patches import Polygon, Circle
@@ -17,6 +19,8 @@ def plot_match(
     output: str = "interface_view.png",
     display_results: bool = False,
     dpi: int = 400,
+    film_composition: tp.Optional[str] = None,
+    substrate_composition: tp.Optional[str] = None,
 ):
     strain_matrix = match.film_to_substrate_strain_transform[:2, :2]
     film_align_matrix = match.film_align_transform[:2, :2]
@@ -405,6 +409,46 @@ def plot_match(
         zorder=310,
         part="_{" + film_label + "}",
     )
+
+    legend_pad = 0.03
+
+    if substrate_composition is not None:
+        ax.annotate(
+            substrate_composition,
+            xy=(legend_pad, 1 - legend_pad),
+            xycoords="axes fraction",
+            ha="left",
+            va="top",
+            bbox=dict(
+                boxstyle="round",
+                fc=[(0.05 * c) + 0.95 for c in to_rgb(substrate_color)],
+                ec=[(0.3 * c) + 0.7 for c in to_rgb(substrate_color)],
+                alpha=1.0,
+            ),
+            fontsize=12,
+            zorder=1000,
+            color=substrate_color,
+            weight="bold",
+        )
+
+    if film_composition is not None:
+        ax.annotate(
+            film_composition,
+            xy=(1 - legend_pad, 1 - legend_pad),
+            xycoords="axes fraction",
+            ha="right",
+            va="top",
+            bbox=dict(
+                boxstyle="round",
+                fc=[(0.05 * c) + 0.95 for c in to_rgb(film_color)],
+                ec=[(0.3 * c) + 0.7 for c in to_rgb(film_color)],
+                alpha=1.0,
+            ),
+            fontsize=12,
+            zorder=1000,
+            color=film_color,
+            weight="bold",
+        )
 
     fig.tight_layout(pad=0.5)
     fig.savefig(output, transparent=False)

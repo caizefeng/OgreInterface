@@ -1335,6 +1335,12 @@ class BaseInterface(ABC):
             display_results: Determines if the matplotlib figure is closed or not after the plot if made.
                 if display_results=True the plot will show up after you run the cell in colab/jupyter notebook.
         """
+        substrate_composition = utils.get_latex_formula(
+            self.substrate.oriented_bulk.bulk.composition.reduced_formula
+        )
+        film_composition = utils.get_latex_formula(
+            self.film.oriented_bulk.bulk.composition.reduced_formula
+        )
         plot_match(
             match=self.match,
             padding=0.2,
@@ -1344,6 +1350,8 @@ class BaseInterface(ABC):
             film_label=film_label,
             output=output,
             display_results=display_results,
+            film_composition=film_composition,
+            substrate_composition=substrate_composition,
         )
 
     def _get_base_poscar_comment_str(self, orthogonal: bool):

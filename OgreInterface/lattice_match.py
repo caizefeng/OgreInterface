@@ -103,6 +103,9 @@ class ZurMcGill:
     def _get_area(self, vectors: np.ndarray) -> float:
         return np.linalg.norm(np.cross(vectors[0], vectors[1]))
 
+    def _get_areas(self, vectors: np.ndarray) -> np.ndarray:
+        return self._vec_norm(np.cross(vectors[:, 0], vectors[:, 1]))
+
     def _get_rs(self) -> Iterable[np.ndarray]:
         film_rs = np.arange(1, (self.max_area // self.film_area) + 1).astype(
             int
@@ -301,6 +304,9 @@ class ZurMcGill:
         film_a_norm = self._vec_norm(film_vectors[:, 0])
         sub_a_norm = self._vec_norm(sub_vectors[:, 0])
 
+        film_areas = self._get_areas(film_vectors)
+        sub_areas = self._get_areas(sub_vectors)
+
         film_a_to_i_transform = self._build_a_to_i(
             vectors=film_vectors,
             a_norms=film_a_norm,
@@ -326,6 +332,8 @@ class ZurMcGill:
         film_inds = product_inds[:, 0]
         sub_inds = product_inds[:, 1]
 
+        area_mask = film_areas[film_inds] > sub_areas[sub_inds]
+
         film_inverse_2d_vectors = self._2d_inv(vectors=aligned_film_vectors)
 
         strain_transformations = self._get_strain_transformation(
@@ -333,12 +341,17 @@ class ZurMcGill:
             substrate_vectors=aligned_sub_vectors[sub_inds][:, :, :2],
         )
 
+        corrected_strain_transformations = np.copy(strain_transformations)
+        corrected_strain_transformations[area_mask] = self._2d_inv(
+            strain_transformations[area_mask]
+        )
+
         identities = np.repeat(
             np.eye(2).reshape(-1, 2, 2), repeats=len(film_inds), axis=0
         )
 
         strain = (1 / np.sqrt(2)) * self._matrix_norm(
-            matrices=(identities - strain_transformations)
+            matrices=(identities - corrected_strain_transformations)
         )
 
         is_equal = np.round(strain, 5) <= self.max_strain

@@ -452,6 +452,11 @@ def get_unique_miller_indices(
     # Stack all of the unique planes into an array
     unique_planes = np.vstack(unique_planes)
 
+    if is_hexagonal:
+        unique_planes = np.array(
+            [hex_to_cubic_plane(hkil) for hkil in unique_planes]
+        )
+
     # Sort the planes by the shortest norm and most positive elements
     sorted_planes = sorted(
         unique_planes, key=lambda x: (np.linalg.norm(x), -np.sign(x).sum())

@@ -66,7 +66,7 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         cmap_PES="coolwarm",
         auto_determine_born_n: bool = False,
         born_n: float = 12.0,
-        n_workers: int = cpu_count(),
+        n_workers: int = cpu_count() - 4,
         app_mode: bool = False,
         dpi: int = 400,
         verbose: bool = True,
