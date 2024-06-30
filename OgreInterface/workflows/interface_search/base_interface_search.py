@@ -607,12 +607,15 @@ class BaseInterfaceSearch(ABC):
                 "substrateSurfaceCharge",
                 "adhesionEnergy",
                 "interfaceEnergy",
+                "area",
+                "strain",
                 "converged",
             ]
         ]
 
         if not self._app_mode:
             df.to_csv(join(base_dir, "opt_data.csv"), index=False)
+            df.to_excel(join(base_dir, "opt_data.xlsx"), index=False)
 
         x_label_key = "(Film Index, Substrate Index)"
         df[x_label_key] = [
