@@ -83,7 +83,7 @@ class ZurMcGill:
         self.max_strain = max_strain
 
         if max_area_mismatch is None:
-            self.max_area_mismatch = np.sqrt(max_strain)
+            self.max_area_mismatch = ((1 + max_strain) ** 2) - 1
         else:
             self.max_area_mismatch = max_area_mismatch
 
