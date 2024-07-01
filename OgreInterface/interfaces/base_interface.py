@@ -618,14 +618,21 @@ class BaseInterface(ABC):
         match_b_sub = (
             f"{s_sf[1]}*[{s_uvw[1][0]:2d} {s_uvw[1][1]:2d} {s_uvw[1][2]:2d}]"
         )
+        formulas = [
+            (self.film.formula, self.film.area),
+            (self.substrate.formula, self.substrate.area),
+        ]
+        formulas.sort(key=lambda x: x[1])
+
         return_info = [
             "Film: " + film_str,
             "Substrate: " + sub_str,
-            "Epitaxial Match Along \\vec{a} (film || sub): "
-            + f"({match_a_film} || {match_a_sub})",
-            "Epitaxial Match Along \\vec{b} (film || sub): "
-            + f"({match_b_film} || {match_b_sub})",
-            "Strain (%): " + f"{100*self.match.strain:.3f}",
+            f"Epitaxial Match Along a-vector ({self.film.formula} \u21d1 {self.substrate.formula}): "
+            + f"({match_a_film} \u21d1 {match_a_sub})",
+            f"Epitaxial Match Along b-vector ({self.film.formula} \u21d1 {self.substrate.formula}): "
+            + f"({match_b_film} \u21d1 {match_b_sub})",
+            f"Strain (%) {formulas[0][0]} -> {formulas[1][0]}: "
+            + f"{100*self.match.strain:.3f}",
             "Cross Section Area (Ang^2): " + f"{self.area:.3f}",
         ]
         return_str = "\n".join(return_info)
