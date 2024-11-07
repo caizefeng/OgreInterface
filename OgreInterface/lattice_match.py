@@ -160,13 +160,23 @@ class ZurMcGill:
                     eq_film_inds
                 ]
                 eq_sub_reduction_matrices = sub_reduction_matrices[eq_sub_inds]
-                eq_areas = self._vec_norm(
+                eq_sub_areas = self._vec_norm(
                     np.cross(
                         eq_reduced_sub_sl_vectors[:, 0],
                         eq_reduced_sub_sl_vectors[:, 1],
                         axis=1,
                     )
                 )
+
+                eq_film_areas = self._vec_norm(
+                    np.cross(
+                        eq_reduced_film_sl_vectors[:, 0],
+                        eq_reduced_film_sl_vectors[:, 1],
+                        axis=1,
+                    )
+                )
+
+                eq_areas = (eq_sub_areas + eq_film_areas) / 2
 
                 eq_total_film_transforms_2d = np.einsum(
                     "...ij,...jk",

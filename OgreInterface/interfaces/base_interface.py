@@ -492,7 +492,9 @@ class BaseInterface(ABC):
         Returns:
             Cross-section area in Angstroms^2
         """
-        return self.match.area
+        matrix = deepcopy(self._orthogonal_structure.lattice.matrix)
+        area = np.linalg.norm(np.cross(matrix[0], matrix[1]))
+        return area
 
     @property
     def _structure_volume(self) -> float:
