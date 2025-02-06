@@ -326,7 +326,7 @@ class InterfaceGenerator:
         )
         return interface
 
-    def generate_interfaces(self, generate_all: bool = True):
+    def generate_interfaces(self):
         """Generates a list of Interface objects from that matches found using the Zur and McGill lattice matching algorithm"""
         interfaces = []
 
@@ -335,12 +335,25 @@ class InterfaceGenerator:
                 f"Generating Interfaces for {self.film.formula_with_miller}[{self.film.termination_index}] and {self.substrate.formula_with_miller}[{self.substrate.termination_index}]:"
             )
 
-        if generate_all:
-            for match in tqdm(self.match_list, dynamic_ncols=True):
-                interface = self._build_interface(match=match)
-                interfaces.append(interface)
-        else:
-            interface = self._build_interface(match=self.match_list[0])
+        for match in tqdm(
+            self.match_list,
+            dynamic_ncols=True,
+            disable=(not self._verbose),
+        ):
+            interface = self._build_interface(match=match)
             interfaces.append(interface)
 
         return interfaces
+
+    def generate_interface(self, interface_index: int = 0):
+        """Generates a list of Interface objects from that matches found using the Zur and McGill lattice matching algorithm"""
+        if self._verbose:
+            print(
+                f"Generating Interface {interface_index} for {self.film.formula_with_miller}[{self.film.termination_index}] and {self.substrate.formula_with_miller}[{self.substrate.termination_index}]:"
+            )
+
+        interface = self._build_interface(
+            match=self.match_list[interface_index]
+        )
+
+        return interface

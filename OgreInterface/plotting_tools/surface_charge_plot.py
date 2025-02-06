@@ -114,11 +114,11 @@ def plot_surface_charge_matrix(
 
     ax.tick_params(labelsize=fontsize)
     ax.set_xlabel(
-        f"{sub_comp}({sub_miller}) Termination Index",
+        f"{sub_comp}({sub_miller}) Slab Index",
         fontsize=fontsize,
     )
     ax.set_ylabel(
-        f"{film_comp}({film_miller}) Termination Index",
+        f"{film_comp}({film_miller}) Slab Index",
         fontsize=fontsize,
     )
 
@@ -232,7 +232,7 @@ def plot_surface_charge_matrix(
     cbar.ax.locator_params(nbins=(2 * cmap_max) + 1)
 
     cbar.set_label(
-        "Residual Surface Charge (Film/Substrate)",
+        f"Residual Surface Charge ({film_comp}/{sub_comp})",
         fontsize=fontsize,
         labelpad=8,
     )

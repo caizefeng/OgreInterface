@@ -5,7 +5,7 @@ import os
 import io
 import base64
 import json
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 import logging
 import itertools
 
@@ -16,8 +16,10 @@ from ase import Atoms
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
+from matplotlib.colors import to_hex
 import pandas as pd
 import seaborn as sns
+from tqdm import tqdm
 
 from OgreInterface.interfaces import BaseInterface
 from OgreInterface.generate import InterfaceGenerator, BaseSurfaceGenerator
@@ -89,11 +91,7 @@ class BaseInterfaceSearch(ABC):
         fast_mode: bool = True,
         interface_index: int = 0,
     ):
-        if n_workers > 1:
-            self._verbose = False
-        else:
-            self._verbose = verbose
-
+        self._verbose = verbose
         self._fast_mode = fast_mode
         self.surface_matching_module = surface_matching_module
         self.surface_energy_module = surface_energy_module
@@ -134,6 +132,14 @@ class BaseInterfaceSearch(ABC):
                 suppress_warnings=self._suppress_warnings,
             )
 
+        self._sub_comp = self._substrate_bulk.composition.reduced_formula
+        self._film_comp = self._film_bulk.composition.reduced_formula
+        self._sub_comp_file = self._sub_comp.replace("(", "-").replace(
+            ")", "-"
+        )
+        self._film_comp_file = self._film_comp.replace("(", "-").replace(
+            ")", "-"
+        )
         self._n_particles_PSO = n_particles_PSO
         self._max_iterations_PSO = max_iterations_PSO
         self._z_bounds_PSO = z_bounds_PSO
@@ -240,9 +246,11 @@ class BaseInterfaceSearch(ABC):
 
     def _optimize_single_interface(
         self,
-        base_dir: str,
-        interface: BaseInterface,
+        inputs: tp.Tuple[str, BaseInterface],
     ):
+        base_dir = inputs[0]
+        interface = inputs[1]
+
         film = interface.film
         sub = interface.substrate
 
@@ -250,13 +258,16 @@ class BaseInterfaceSearch(ABC):
         sub_ind = sub.termination_index
 
         data = {
-            "filmIndex": int(film_ind),
-            "substrateIndex": int(sub_ind),
-            "filmSurfaceCharge": float(film.bottom_surface_charge),
-            "substrateSurfaceCharge": float(sub.top_surface_charge),
+            "materialBIndex": int(film_ind),
+            "materialAIndex": int(sub_ind),
+            "materialBSurfaceCharge": float(film.bottom_surface_charge),
+            "materialASurfaceCharge": float(sub.top_surface_charge),
         }
 
-        interface_dir = join(base_dir, f"film{film_ind:02d}_sub{sub_ind:02d}")
+        interface_dir = join(
+            base_dir,
+            f"{self._film_comp_file}_{film_ind:02d}_{self._sub_comp_file}_{sub_ind:02d}",
+        )
 
         if not self._app_mode:
             if not isdir(interface_dir):
@@ -270,13 +281,23 @@ class BaseInterfaceSearch(ABC):
         data.update(surface_specific_props)
 
         if not self._app_mode:
-            film.write_file(join(interface_dir, f"POSCAR_film_{film_ind:02d}"))
-            sub.write_file(join(interface_dir, f"POSCAR_sub_{sub_ind:02d}"))
+            film.write_file(
+                join(
+                    interface_dir,
+                    f"POSCAR_{self._film_comp_file}_{film_ind:02d}",
+                )
+            )
+            sub.write_file(
+                join(
+                    interface_dir,
+                    f"POSCAR_{self._sub_comp_file}_{sub_ind:02d}",
+                )
+            )
 
         surface_matcher = self.surface_matching_module(
             interface=interface,
             grid_density=self._grid_density_PES,
-            verbose=self._verbose,
+            verbose=False,
             **self.surface_matching_kwargs,
         )
 
@@ -299,7 +320,7 @@ class BaseInterfaceSearch(ABC):
         if not self._fast_mode:
             z_shift_raw_data_path = join(
                 interface_dir,
-                f"z_shift_film{film_ind:02d}_sub{sub_ind:02d}.npz",
+                f"z_shift_{self._film_comp_file}_{film_ind:02d}_{self._sub_comp_file}_{sub_ind:02d}.npz",
             )
             stream_z_shift = io.BytesIO()
             surface_matcher.run_z_shift(
@@ -326,7 +347,7 @@ class BaseInterfaceSearch(ABC):
                 with open(
                     join(
                         interface_dir,
-                        f"z_shift_film{film_ind:02d}_sub{sub_ind:02d}.png",
+                        f"z_shift_{self._film_comp_file}_{film_ind:02d}_{self._sub_comp_file}_{sub_ind:02d}.png",
                     ),
                     "wb",
                 ) as f:
@@ -350,7 +371,7 @@ class BaseInterfaceSearch(ABC):
                 with open(
                     join(
                         interface_dir,
-                        f"PES_opt_film{film_ind:02d}_sub{sub_ind:02d}.png",
+                        f"PES_opt_{self._film_comp_file}_{film_ind:02d}_{self._sub_comp_file}_{sub_ind:02d}.png",
                     ),
                     "wb",
                 ) as f:
@@ -381,13 +402,13 @@ class BaseInterfaceSearch(ABC):
             interface.write_file(
                 join(
                     interface_dir,
-                    f"POSCAR_interface_film{film_ind:02d}_sub{sub_ind:02d}",
+                    f"POSCAR_interface_{self._film_comp_file}_{film_ind:02d}_{self._sub_comp_file}_{sub_ind:02d}",
                 )
             )
             Poscar(small_interface_structure).write_file(
                 join(
                     interface_dir,
-                    f"POSCAR_interface_film{film_ind:02d}_sub{sub_ind:02d}_small",
+                    f"POSCAR_interface_{self._film_comp_file}_{film_ind:02d}_{self._sub_comp_file}_{sub_ind:02d}_small",
                 )
             )
 
@@ -399,15 +420,17 @@ class BaseInterfaceSearch(ABC):
         data["aShift"] = float(a_shift)
         data["bShift"] = float(b_shift)
         data["interfacialDistance"] = float(opt_d)
-        data["filmSurfaceEnergy"] = float(film_surface_energy)
-        data["substrateSurfaceEnergy"] = float(sub_surface_energy)
+        data["materialBSurfaceEnergy"] = float(film_surface_energy)
+        data["materialASurfaceEnergy"] = float(sub_surface_energy)
         data["fullInterfaceStructure"] = interface_structure.as_dict()
         data["smallInterfaceStructure"] = small_interface_structure.as_dict()
-        data["filmTerminationComp"] = film_termination
-        data["substrateTerminationComp"] = substrate_termination
+        data["materialBTerminationComp"] = film_termination
+        data["materialATerminationComp"] = substrate_termination
         data["area"] = interface.area
         data["strain"] = 100 * interface.match.strain
         data["converged"] = bool(opt_d < 0.99 * max_z)
+        data["materialAComposition"] = self._sub_comp
+        data["materialBComposition"] = self._film_comp
 
         return data
 
@@ -496,12 +519,13 @@ class BaseInterfaceSearch(ABC):
         filter_on_charge: bool = True,
         output_folder: str = None,
     ):
-        sub_comp = self._substrate_bulk.composition.reduced_formula
-        film_comp = self._film_bulk.composition.reduced_formula
+        sub_comp = self._sub_comp
+        film_comp = self._film_comp
+
         sub_miller = "".join([str(i) for i in self._substrate_miller_index])
         film_miller = "".join([str(i) for i in self._film_miller_index])
         if output_folder is None:
-            base_dir = f"{film_comp}{film_miller}_{sub_comp}{sub_miller}"
+            base_dir = f"{self._film_comp_file}{film_miller}_{self._sub_comp_file}{sub_miller}"
 
             current_dirs = [d for d in os.listdir() if base_dir in d]
 
@@ -529,12 +553,19 @@ class BaseInterfaceSearch(ABC):
 
         if self._verbose:
             print(
-                f"Preparing to Optimize {len(film_and_substrate_inds)} {film_comp}({film_miller})/{sub_comp}({sub_miller}) Interfaces..."
+                f"Generating {len(film_and_substrate_inds)} {film_comp}({film_miller})/{sub_comp}({sub_miller}) Interfaces..."
             )
 
         interfaces = []
 
-        for i, film_sub_ind in enumerate(film_and_substrate_inds):
+        for i, film_sub_ind in enumerate(
+            tqdm(
+                film_and_substrate_inds,
+                dynamic_ncols=True,
+                disable=(not self._verbose),
+                colour=to_hex("green"),
+            )
+        ):
             film_ind = film_sub_ind[0]
             sub_ind = film_sub_ind[1]
 
@@ -551,19 +582,12 @@ class BaseInterfaceSearch(ABC):
                 vacuum=self._vacuum,
                 center=True,
                 substrate_strain_fraction=self._substrate_strain_fraction,
-                verbose=self._verbose,
+                verbose=False,
             )
 
-            # Generate the interfaces
-            if self._interface_index > 0:
-                generate_all = True
-            else:
-                generate_all = False
-
-            ifaces = interface_generator.generate_interfaces(
-                generate_all=generate_all
+            iface = interface_generator.generate_interface(
+                interface_index=self._interface_index
             )
-            iface = ifaces[self._interface_index]
 
             interfaces.append(iface)
 
@@ -582,41 +606,67 @@ class BaseInterfaceSearch(ABC):
                     with open(join(base_dir, "interface_view.png"), "wb") as f:
                         f.write(stream_view_value)
 
+        workers = min(self.n_workers, len(interfaces), cpu_count())
+        if self._verbose:
+            print(
+                f"Optimizing {len(interfaces)} interfaces using {workers}/{cpu_count()} CPU cores"
+            )
+
         if self.n_workers <= 1:
             data_list = []
-            for interface in interfaces:
+            for interface in tqdm(
+                interfaces,
+                dynamic_ncols=True,
+                disable=(not self._verbose),
+                colour=to_hex("orange"),
+            ):
                 data = self._optimize_single_interface(
-                    base_dir=base_dir,
-                    interface=interface,
+                    inputs=(base_dir, interface),
                 )
                 data_list.append(data)
         else:
-            with Pool(self.n_workers) as p:
+            with Pool(workers) as p:
                 inputs = zip(itertools.repeat(base_dir), interfaces)
-                data_list = p.starmap(self._optimize_single_interface, inputs)
+                data_list = list(
+                    tqdm(
+                        p.imap(self._optimize_single_interface, inputs),
+                        total=len(interfaces),
+                        disable=(not self._verbose),
+                        colour=to_hex("orange"),
+                    )
+                )
+
+                # data_list = p.starmap(self._optimize_single_interface, inputs)
 
         data_list.sort(key=lambda x: x["interfaceEnergy"])
 
         df = pd.DataFrame(data=data_list)
         df = df[
             [
-                "filmIndex",
-                "substrateIndex",
+                "materialAComposition",
+                "materialBComposition",
+                "materialBIndex",
+                "materialAIndex",
                 "interfacialDistance",
-                "filmSurfaceCharge",
-                "substrateSurfaceCharge",
+                "materialBSurfaceCharge",
+                "materialASurfaceCharge",
                 "adhesionEnergy",
                 "interfaceEnergy",
+                "area",
+                "strain",
                 "converged",
             ]
         ]
 
         if not self._app_mode:
             df.to_csv(join(base_dir, "opt_data.csv"), index=False)
+            df.to_excel(join(base_dir, "opt_data.xlsx"), index=False)
 
-        x_label_key = "(Film Index, Substrate Index)"
+        x_label_key = (
+            f"({self._film_comp} Slab Index, {self._sub_comp} Slab Index)"
+        )
         df[x_label_key] = [
-            f"({int(row['filmIndex'])},{int(row['substrateIndex'])})"
+            f"({int(row['materialBIndex'])},{int(row['materialAIndex'])})"
             for i, row in df.iterrows()
         ]
 
@@ -684,12 +734,12 @@ class BaseInterfaceSearch(ABC):
 
         run_data = {
             "bulkData": {
-                "substrateBulk": self._substrate_bulk.as_dict(),
-                "filmBulk": self._film_bulk.as_dict(),
+                "materialABulk": self._substrate_bulk.as_dict(),
+                "materialBBulk": self._film_bulk.as_dict(),
             },
             "optData": {
-                "filmMillerIndex": film_miller,
-                "substrateMillerIndex": substrate_miller,
+                "materialBMillerIndex": film_miller,
+                "materialAMillerIndex": substrate_miller,
                 "maxStrain": float(100 * self._max_strain),
                 "maxArea": self._max_area and float(self._max_area),
                 "maxAreaMismatch": self._max_area_mismatch
