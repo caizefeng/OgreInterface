@@ -680,17 +680,12 @@ class BaseInterfaceSearch(ABC):
         adhE_df.columns = [x_label_key, adhE_key]
         adhE_df.sort_values(by=adhE_key, inplace=True)
 
-        fig, (ax_adh, ax_int) = plt.subplots(
-            figsize=(max(len(df) / 3, 7), 7),
+        # -----------------------------------------------
+        # 1) Create a figure for the ADHESION ENERGY data
+        fig_adh, ax_adh = plt.subplots(
+            figsize=(max(len(df) / 3, 7), 5),
             dpi=self._dpi,
-            nrows=2,
         )
-
-        ax_adh.tick_params(axis="x", rotation=90.0)
-        ax_int.tick_params(axis="x", rotation=90.0)
-        ax_adh.axhline(y=0, color="black", linewidth=0.5)
-        ax_int.axhline(y=0, color="black", linewidth=0.5)
-
         sns.barplot(
             data=adhE_df,
             x=x_label_key,
@@ -699,6 +694,28 @@ class BaseInterfaceSearch(ABC):
             edgecolor="black",
             linewidth=0.5,
             ax=ax_adh,
+        )
+        ax_adh.axhline(y=0, color="black", linewidth=0.5)
+        ax_adh.tick_params(axis="x", rotation=90.0)
+        ax_adh.set_title("Adhesion Energy")
+        fig_adh.tight_layout(pad=0.5)
+
+        # Save to BytesIO (base64 for app usage) and as a file
+        stream_adh = io.BytesIO()
+        fig_adh.savefig(stream_adh, transparent=False)
+        stream_adh_value = stream_adh.getvalue()
+        stream_adh_base64 = base64.b64encode(stream_adh_value).decode()
+        plt.close(fig_adh)
+
+        if not self._app_mode:
+            with open(join(base_dir, "adhesion_energy.png"), "wb") as f:
+                f.write(stream_adh_value)
+
+        # -----------------------------------------------
+        # 2) Create a figure for the INTERFACE ENERGY data
+        fig_int, ax_int = plt.subplots(
+            figsize=(max(len(df) / 3, 7), 5),
+            dpi=self._dpi,
         )
         sns.barplot(
             data=intE_df,
@@ -709,25 +726,70 @@ class BaseInterfaceSearch(ABC):
             linewidth=0.5,
             ax=ax_int,
         )
+        ax_int.axhline(y=0, color="black", linewidth=0.5)
+        ax_int.tick_params(axis="x", rotation=90.0)
+        ax_int.set_title("Interface Energy")
+        fig_int.tight_layout(pad=0.5)
 
-        fig.tight_layout(pad=0.5)
-
-        stream_energies = io.BytesIO()
-        fig.savefig(
-            stream_energies,
-            transparent=False,
-        )
-
-        plt.close(fig=fig)
-
-        stream_energies_value = stream_energies.getvalue()
-        stream_energies_base64 = base64.b64encode(
-            stream_energies_value
-        ).decode()
+        # Save to BytesIO (base64 for app usage) and as a file
+        stream_int = io.BytesIO()
+        fig_int.savefig(stream_int, transparent=False)
+        stream_int_value = stream_int.getvalue()
+        stream_int_base64 = base64.b64encode(stream_int_value).decode()
+        plt.close(fig_int)
 
         if not self._app_mode:
-            with open(join(base_dir, "opt_energies.png"), "wb") as f:
-                f.write(stream_energies_value)
+            with open(join(base_dir, "interface_energy.png"), "wb") as f:
+                f.write(stream_int_value)
+
+        # fig, (ax_adh, ax_int) = plt.subplots(
+        #     figsize=(max(len(df) / 3, 7), 7),
+        #     dpi=self._dpi,
+        #     nrows=2,
+        # )
+        #
+        # ax_adh.tick_params(axis="x", rotation=90.0)
+        # ax_int.tick_params(axis="x", rotation=90.0)
+        # ax_adh.axhline(y=0, color="black", linewidth=0.5)
+        # ax_int.axhline(y=0, color="black", linewidth=0.5)
+        #
+        # sns.barplot(
+        #     data=adhE_df,
+        #     x=x_label_key,
+        #     y=adhE_key,
+        #     color="lightgrey",
+        #     edgecolor="black",
+        #     linewidth=0.5,
+        #     ax=ax_adh,
+        # )
+        # sns.barplot(
+        #     data=intE_df,
+        #     x=x_label_key,
+        #     y=intE_key,
+        #     color="lightgrey",
+        #     edgecolor="black",
+        #     linewidth=0.5,
+        #     ax=ax_int,
+        # )
+        #
+        # fig.tight_layout(pad=0.5)
+        #
+        # stream_energies = io.BytesIO()
+        # fig.savefig(
+        #     stream_energies,
+        #     transparent=False,
+        # )
+        #
+        # plt.close(fig=fig)
+        #
+        # stream_energies_value = stream_energies.getvalue()
+        # stream_energies_base64 = base64.b64encode(
+        #     stream_energies_value
+        # ).decode()
+        #
+        # if not self._app_mode:
+        #     with open(join(base_dir, "opt_energies.png"), "wb") as f:
+        #         f.write(stream_energies_value)
 
         film_miller = list(self._film_miller_index)
         substrate_miller = list(self._substrate_miller_index)
@@ -745,7 +807,9 @@ class BaseInterfaceSearch(ABC):
                 "maxAreaMismatch": self._max_area_mismatch
                 and float(self._max_area_mismatch),
                 "matchFigure": stream_view_base64,
-                "totalEnergiesFigure": stream_energies_base64,
+                # "totalEnergiesFigure": stream_energies_base64,
+                "adhesionEnergyFigure": stream_adh_base64,
+                "interfaceEnergyFigure": stream_int_base64,
                 "interfaceData": data_list,
             },
         }
