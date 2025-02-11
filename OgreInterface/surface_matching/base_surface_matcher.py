@@ -681,21 +681,23 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
 
         min_Z = np.nanmin(Z)
         max_Z = np.nanmax(Z)
-        if type(cmap) is str:
-            if cmap in diverging_names:
-                bound = np.max([np.abs(min_Z), np.abs(max_Z)])
-                norm = Normalize(vmin=-bound, vmax=bound)
-            else:
-                norm = Normalize(vmin=min_Z, vmax=max_Z)
-        elif type(cmap) is ListedColormap:
-            name = cmap.name
-            if name in diverging_names:
-                bound = np.max([np.abs(min_Z), np.abs(max_Z)])
-                norm = Normalize(vmin=-bound, vmax=bound)
-            else:
-                norm = Normalize(vmin=min_Z, vmax=max_Z)
-        else:
-            norm = Normalize(vmin=min_Z, vmax=max_Z)
+        # if type(cmap) is str:
+        #     if cmap in diverging_names:
+        #         bound = np.max([np.abs(min_Z), np.abs(max_Z)])
+        #         norm = Normalize(vmin=-bound, vmax=bound)
+        #     else:
+        #         norm = Normalize(vmin=min_Z, vmax=max_Z)
+        # elif type(cmap) is ListedColormap:
+        #     name = cmap.name
+        #     if name in diverging_names:
+        #         bound = np.max([np.abs(min_Z), np.abs(max_Z)])
+        #         norm = Normalize(vmin=-bound, vmax=bound)
+        #     else:
+        #         norm = Normalize(vmin=min_Z, vmax=max_Z)
+        # else:
+        #     norm = Normalize(vmin=min_Z, vmax=max_Z)
+
+        norm = Normalize(vmin=min_Z, vmax=max_Z)
 
         ax.contourf(
             X,
