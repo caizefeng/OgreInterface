@@ -752,6 +752,9 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
             cax.xaxis.set_ticks(
                 [norm.vmin, (norm.vmin + norm.vmax) / 2, norm.vmax],
                 [
+                    # f"{norm.vmin:.4f}",
+                    # f"{(norm.vmin + norm.vmax) / 2:.4f}",
+                    # f"{norm.vmax:.4f}",
                     f"{norm.vmin:.2f}",
                     f"{(norm.vmin + norm.vmax) / 2:.2f}",
                     f"{norm.vmax:.2f}",
@@ -864,6 +867,9 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
             X=X_plot,
             Y=Y_plot,
         )
+
+        # offset Z_plot to avoid negative E_adh
+        Z_plot = Z_plot - Z_plot.min()
 
         opt_val, opt_shift = self._get_optimal_point(
             X=X_plot,
