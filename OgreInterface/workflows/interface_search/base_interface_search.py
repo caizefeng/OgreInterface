@@ -90,6 +90,8 @@ class BaseInterfaceSearch(ABC):
         verbose: bool = True,
         fast_mode: bool = True,
         interface_index: int = 0,
+        substrate_layer_grouping_tolerance: tp.Optional[float] = None,
+        film_layer_grouping_tolerance: tp.Optional[float] = None,
     ):
         self._verbose = verbose
         self._fast_mode = fast_mode
@@ -155,6 +157,9 @@ class BaseInterfaceSearch(ABC):
         self._max_area = max_area
         self._cmap_PES = cmap_PES
 
+        self._substrate_layer_grouping_tolerance = substrate_layer_grouping_tolerance
+        self._film_layer_grouping_tolerance = film_layer_grouping_tolerance
+
     def _get_surface_generators(self):
         substrate_generator = self.surface_generator(
             bulk=self._substrate_bulk,
@@ -163,6 +168,7 @@ class BaseInterfaceSearch(ABC):
             minimum_thickness=self._minimum_slab_thickness,
             vacuum=40.0,
             refine_structure=self._refine_substrate,
+            layer_grouping_tolarence=self._substrate_layer_grouping_tolerance,
         )
 
         film_generator = self.surface_generator(
@@ -172,6 +178,7 @@ class BaseInterfaceSearch(ABC):
             minimum_thickness=self._minimum_slab_thickness,
             vacuum=40.0,
             refine_structure=self._refine_film,
+            layer_grouping_tolarence=self._film_layer_grouping_tolerance,
         )
 
         return substrate_generator, film_generator

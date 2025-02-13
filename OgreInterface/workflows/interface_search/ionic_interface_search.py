@@ -72,6 +72,8 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         verbose: bool = True,
         fast_mode: bool = False,
         interface_index: int = 0,
+        substrate_layer_grouping_tolerance: tp.Optional[float] = None,
+        film_layer_grouping_tolerance: tp.Optional[float] = None,
     ):
         surface_matching_kwargs = {
             "auto_determine_born_n": auto_determine_born_n,
@@ -108,6 +110,8 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
             verbose=verbose,
             fast_mode=fast_mode,
             interface_index=interface_index,
+            substrate_layer_grouping_tolerance=substrate_layer_grouping_tolerance,
+            film_layer_grouping_tolerance=film_layer_grouping_tolerance,
         )
 
     def _get_film_and_substrate_inds(
