@@ -868,8 +868,8 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
             Y=Y_plot,
         )
 
-        # offset Z_plot to avoid negative E_adh
-        Z_plot = Z_plot - Z_plot.min()
+        # offset Z_plot to avoid negative E_adh (for plotting purposes, compromise the meaning of the adhesive energy)
+        # Z_plot = Z_plot - Z_plot.min()
 
         opt_val, opt_shift = self._get_optimal_point(
             X=X_plot,
@@ -1162,7 +1162,9 @@ class BaseSurfaceMatcher(ABC, metaclass=CombinedPostInitCaller):
 
         interface_energies = self.get_interface_energy(
             adhesion_energies=adhesion_energies
-        )
+        )  # Match the definition in the paper Eq.3
+
+        # Effectively optimize total_energy only since the film/substrate supercell/surface energies are constant
 
         return interface_energies
 
