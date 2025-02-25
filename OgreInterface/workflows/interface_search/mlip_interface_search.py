@@ -73,6 +73,7 @@ class MLIPInterfaceSearch(BaseInterfaceSearch):
             substrate_layer_grouping_tolerance: tp.Optional[float] = None,
             film_layer_grouping_tolerance: tp.Optional[float] = None,
             filter_on_charge: bool = True,
+            sort_by_area_first: bool = True,
             mlip: str = "MACE",
             model_name: tp.Optional[str] = None,
             device: str = "cuda",
@@ -114,6 +115,7 @@ class MLIPInterfaceSearch(BaseInterfaceSearch):
             interface_index=interface_index,
             substrate_layer_grouping_tolerance=substrate_layer_grouping_tolerance,
             film_layer_grouping_tolerance=film_layer_grouping_tolerance,
+            sort_by_area_first=sort_by_area_first
         )
 
     def _get_film_and_substrate_inds(

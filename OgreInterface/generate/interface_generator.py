@@ -96,6 +96,7 @@ class InterfaceGenerator:
         vacuum: float = 40.0,
         center: bool = False,
         substrate_strain_fraction: float = 0.0,
+        sort_by_area_first: bool = True,
         verbose: bool = True,
     ):
         if (
@@ -124,6 +125,7 @@ class InterfaceGenerator:
         self.max_area_scale_factor = max_area_scale_factor
         self.interfacial_distance = interfacial_distance
         self.vacuum = vacuum
+        self.sort_by_area_first = sort_by_area_first
         self._substrate_point_group_operations = (
             self._get_point_group_operations(
                 structure=self.substrate.oriented_bulk._init_bulk,
@@ -154,6 +156,7 @@ class InterfaceGenerator:
             max_strain=self.max_strain,
             max_area_mismatch=self.max_area_mismatch,
             max_area_scale_factor=self.max_area_scale_factor,
+            sort_by_area_first=self.sort_by_area_first
         )
         match_list = zm.run(return_all=True)
 

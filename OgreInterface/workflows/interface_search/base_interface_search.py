@@ -92,6 +92,7 @@ class BaseInterfaceSearch(ABC):
         interface_index: int = 0,
         substrate_layer_grouping_tolerance: tp.Optional[float] = None,
         film_layer_grouping_tolerance: tp.Optional[float] = None,
+        sort_by_area_first: bool = True,
     ):
         self._verbose = verbose
         self._fast_mode = fast_mode
@@ -159,6 +160,7 @@ class BaseInterfaceSearch(ABC):
 
         self._substrate_layer_grouping_tolerance = substrate_layer_grouping_tolerance
         self._film_layer_grouping_tolerance = film_layer_grouping_tolerance
+        self._sort_by_area_first = sort_by_area_first
 
     def _get_surface_generators(self):
         substrate_generator = self.surface_generator(
@@ -588,6 +590,7 @@ class BaseInterfaceSearch(ABC):
                 vacuum=self._vacuum,
                 center=True,
                 substrate_strain_fraction=self._substrate_strain_fraction,
+                sort_by_area_first=self._sort_by_area_first,
                 verbose=False,
             )
 

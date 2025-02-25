@@ -75,6 +75,7 @@ class ZurMcGill:
         max_strain: float = 0.01,
         max_area_mismatch: Optional[float] = None,
         max_area_scale_factor: float = 2.05,
+        sort_by_area_first: bool = True,
     ) -> None:
         self.film_vectors = film_vectors
         self.film_basis = film_basis
@@ -96,6 +97,8 @@ class ZurMcGill:
             )
         else:
             self.max_area = max_area
+
+        self.sort_by_area_first = sort_by_area_first
 
         self.area_ratio = self.film_area / self.substrate_area
         self.film_rs, self.substrate_rs = self._get_rs()
@@ -248,10 +251,16 @@ class ZurMcGill:
                 if not return_all:
                     break
 
-        sorted_matches = sorted(
-            matches,
-            key=lambda x: (x.area, x.strain),
-        )
+        if self.sort_by_area_first:
+            sorted_matches = sorted(
+                matches,
+                key=lambda x: (x.area, x.strain),
+            )
+        else:
+            sorted_matches = sorted(
+                matches,
+                key=lambda x: (x.strain, x.area),
+            )
 
         return sorted_matches
 

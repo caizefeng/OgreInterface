@@ -72,6 +72,7 @@ class MillerSearch(object):
         suppress_warnings: bool = False,
         custom_film_miller_indices: Optional[List[List[int]]] = None,
         custom_substrate_miller_indices: Optional[List[List[int]]] = None,
+        sort_by_area_first: bool = True,
     ) -> None:
         self.refine_structure = refine_structure
         self._suppress_warnings = suppress_warnings
@@ -112,6 +113,7 @@ class MillerSearch(object):
         self.max_strain = max_strain
         self.max_area = max_area
         self.max_area_scale_factor = max_area_scale_factor
+        self.sort_by_area_first = sort_by_area_first
 
         if custom_substrate_miller_indices is not None:
             self.substrate_inds = custom_substrate_miller_indices
@@ -178,13 +180,15 @@ class MillerSearch(object):
                     max_strain=self.max_strain,
                     max_area_mismatch=self.max_area_mismatch,
                     max_area_scale_factor=self.max_area_scale_factor,
+                    sort_by_area_first=self.sort_by_area_first,
                 )
                 matches = zm.run()
 
                 if len(matches) > 0:
-                    min_area_match = matches[0]
-                    area = min_area_match.area
-                    strain = min_area_match.strain
+                    # When sort_by_area_first=True, the first match is the minimum area, else the minimum strain
+                    min_match = matches[0]
+                    area = min_match.area
+                    strain = min_match.strain
                     misfits[i, j] = strain
                     areas[i, j] = area / np.sqrt(substrate[1] * film[1])
 
