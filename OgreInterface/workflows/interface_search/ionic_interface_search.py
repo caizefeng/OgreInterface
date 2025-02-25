@@ -74,11 +74,13 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         interface_index: int = 0,
         substrate_layer_grouping_tolerance: tp.Optional[float] = None,
         film_layer_grouping_tolerance: tp.Optional[float] = None,
+        filter_on_charge: bool = True
     ):
         surface_matching_kwargs = {
             "auto_determine_born_n": auto_determine_born_n,
             "born_n": born_n,
         }
+        self._filter_on_charge = filter_on_charge
         super().__init__(
             surface_matching_module=IonicSurfaceMatcher,
             surface_energy_module=IonicSurfaceEnergy,
@@ -118,7 +120,6 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         self,
         film_generator: SurfaceGenerator,
         substrate_generator: SurfaceGenerator,
-        filter_on_charge: bool = True,
     ) -> tp.List[tp.Tuple[int, int]]:
         film_and_substrate_inds = []
 
@@ -134,7 +135,7 @@ class IonicInterfaceSearch(BaseInterfaceSearch):
         for i, film in enumerate(film_generator):
             for j, sub in enumerate(substrate_generator):
                 if j in substrate_inds_to_use:
-                    if filter_on_charge:
+                    if self._filter_on_charge:
                         sub_sign = np.sign(sub.top_surface_charge)
                         film_sign = np.sign(film.bottom_surface_charge)
 

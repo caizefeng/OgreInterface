@@ -523,7 +523,6 @@ class BaseInterfaceSearch(ABC):
 
     def run_interface_search(
         self,
-        filter_on_charge: bool = True,
         output_folder: str = None,
     ):
         sub_comp = self._sub_comp
