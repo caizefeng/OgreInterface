@@ -107,20 +107,7 @@ class BaseSurfaceEnergy(ABC):
         pass
 
     def get_cleavage_energy(self):
-        """This function calculates the negated adhesion energy of an interface as a function of the interfacial distance
-
-        Args:
-            interfacial_distances: numpy array of the interfacial distances that should be calculated
-            figsize: Size of the figure in inches (x_size, y_size)
-            fontsize: Fontsize of all the plot labels
-            output: Output file name
-            dpi: Resolution of the figure (dots per inch)
-            save_raw_data_file: If you put a valid file path (i.e. anything ending with .npz) then the
-                raw data will be saved there. It can be loaded in via data = np.load(save_raw_data_file)
-                and the data is: interfacial_distances = data["interfacial_distances"], energies = data["energies"]
-
-        Returns:
-            The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
+        """This function calculates the **negated** adhesion energy of an interface as a function of the interfacial distance
         """
         default_distance = self._default_distance
 

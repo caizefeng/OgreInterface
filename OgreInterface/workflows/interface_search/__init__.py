@@ -7,3 +7,6 @@ from OgreInterface.workflows.interface_search.ionic_interface_search import (
 from OgreInterface.workflows.interface_search.lj_interface_search import (
     LJInterfaceSearch,
 )
+from OgreInterface.workflows.interface_search.mlip_interface_search import (
+    MLIPInterfaceSearch,
+)
