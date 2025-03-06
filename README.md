@@ -5,5 +5,5 @@ Package for creating and optimizing lattice matched and domain matched epitaxial
 ## Installation
 
 ```bash
-python setup.py develop
+pip install OgreInterface
 ```
